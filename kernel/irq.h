@@ -16,4 +16,7 @@ void irq_mask(int irq, int masked);
 /* Dispatch the handler for a given IRQ number. Called from the IRQ stubs. */
 void irq_dispatch(int irq);
 
+/* Initialise the IRQ stubs and mask all IRQs. Called during kernel init. */
+void irq_init(void);
+
 #endif /* IRQ_H */
