@@ -1,9 +1,11 @@
 #ifndef KEYBOARD_H
 #define KEYBOARD_H
 
-/* Initialise the keyboard driver.  In this minimal implementation
- * nothing is required; a real driver would install an IRQ handler
- * and decode scan codes into ASCII. */
+/* Initialise the keyboard driver and register the IRQ handler. */
 void keyboard_init(void);
+
+/* Retrieve a character from the keyboard buffer.
+ * Returns -1 if no character is available. */
+int kbd_getchar(void);
 
 #endif /* KEYBOARD_H */
