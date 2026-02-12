@@ -1,16 +1,16 @@
 TARGET = i686-elf
 CC     = gcc
-AS     = nasm
+AS     = as
 LD     = ld
 
 # Flags for building a freestanding 32‑bit kernel.  We disable stack
 # protector and all floating point support.  We also disable PIE and
 # built‑ins so that no assumptions are made about the runtime
 # environment.
-CFLAGS = -ffreestanding -fno-pic -m32 -O2 -Wall -Wextra \
-         -nostdlib -fno-builtin -fno-stack-protector -mno-sse \
-         -mno-sse2 -mno-red-zone
-ASFLAGS = -f elf32
+ CFLAGS = -ffreestanding -fno-pic -m32 -O2 -Wall -Wextra \
+          -nostdlib -fno-builtin -fno-stack-protector -mno-sse \
+          -mno-sse2 -mno-red-zone -mno-80387
+ASFLAGS = --32
 LDFLAGS = -m elf_i386
 
 # Build directories
@@ -35,7 +35,7 @@ $(BUILD)/multiboot2_header.o: boot/multiboot2_header.S
 $(BUILD)/loader.o: boot/loader.S
 	$(AS) $(ASFLAGS) $< -o $@
 
-$(BUILD)/kernel.elf: $(BUILD)/multiboot2_header.o $(BUILD)/loader.o $(ASM_OBJS) $(OBJS) kernel/linker.ld
+$(BUILD)/kernel.elf: $(BUILD)/multiboot2_header.o $(BUILD)/loader.o $(ASM_OBJS) $(OBJS)
 	$(LD) $(LDFLAGS) -T kernel/linker.ld -o $@ $^
 
 $(ISO): $(BUILD)/kernel.elf iso/boot/grub/grub.cfg
@@ -44,7 +44,17 @@ $(ISO): $(BUILD)/kernel.elf iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) iso > /dev/null 2>&1
 
 run: $(ISO)
-	qemu-system-i386 -cdrom $(ISO)
+	# Run QEMU with graphical UI (GTK) and forward COM1 to this terminal.
+	# Using "mon:stdio" keeps stdin input reliable when piping data at launch.
+	# -no-reboot prevents automatic reboot on triple fault.
+	# -no-shutdown keeps QEMU running even if the guest issues a shutdown.
+	qemu-system-i386 \
+		-cdrom $(ISO) \
+		-display gtk \
+		-serial mon:stdio \
+		-monitor none \
+		-no-reboot \
+		-no-shutdown
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.elf

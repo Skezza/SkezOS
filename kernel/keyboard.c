@@ -37,9 +37,23 @@ static const char kbd_us_shift[128] = {
 
 static bool shift_pressed = false;
 
+static void kbd_buffer_put(char ch) {
+    uint8_t next = (kbd_head + 1) % KBD_BUF_SIZE;
+    if (next == kbd_tail) {
+        return;
+    }
+    kbd_buffer[kbd_head] = ch;
+    kbd_head = next;
+}
+
 static void keyboard_handler(void *ctx) {
     (void)ctx;
     uint8_t scancode = inb(0x60);
+    serial_writestr("IRQ1 scancode:");
+    serial_writechar(' ');
+    serial_writechar((scancode >> 4) < 10 ? '0' + (scancode >> 4) : 'A' + (scancode >> 4) - 10);
+    serial_writechar((scancode & 0xF) < 10 ? '0' + (scancode & 0xF) : 'A' + (scancode & 0xF) - 10);
+    serial_writechar('\n');
     if (scancode & 0x80) {
         /* Key release */
         uint8_t code = scancode & 0x7F;
@@ -55,11 +69,7 @@ static void keyboard_handler(void *ctx) {
         }
         char ch = shift_pressed ? kbd_us_shift[scancode] : kbd_us[scancode];
         if (ch != 0) {
-            uint8_t next = (kbd_head + 1) % KBD_BUF_SIZE;
-            if (next != kbd_tail) {
-                kbd_buffer[kbd_head] = ch;
-                kbd_head = next;
-            }
+            kbd_buffer_put(ch);
         }
     }
 }
@@ -73,6 +83,103 @@ int kbd_getchar(void) {
     char c = kbd_buffer[kbd_tail];
     kbd_tail = (kbd_tail + 1) % KBD_BUF_SIZE;
     return (int)(unsigned char)c;
+}
+
+static bool ascii_to_scancode(char c, uint8_t *code, bool *shift) {
+    *shift = false;
+    if (c >= 'a' && c <= 'z') {
+        static const uint8_t table[26] = {
+            0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23,
+            0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18, 0x19,
+            0x10, 0x13, 0x1F, 0x14, 0x16, 0x2F, 0x11, 0x2D,
+            0x15, 0x2C
+        };
+        *code = table[c - 'a'];
+        return true;
+    }
+    if (c >= 'A' && c <= 'Z') {
+        uint8_t lower;
+        if (!ascii_to_scancode((char)(c - 'A' + 'a'), &lower, shift))
+            return false;
+        *code = lower;
+        *shift = true;
+        return true;
+    }
+    switch (c) {
+    case '1': *code = 0x02; return true;
+    case '2': *code = 0x03; return true;
+    case '3': *code = 0x04; return true;
+    case '4': *code = 0x05; return true;
+    case '5': *code = 0x06; return true;
+    case '6': *code = 0x07; return true;
+    case '7': *code = 0x08; return true;
+    case '8': *code = 0x09; return true;
+    case '9': *code = 0x0A; return true;
+    case '0': *code = 0x0B; return true;
+    case '\r': *code = 0x1C; return true;
+    case '\n': *code = 0x1C; return true;
+    case '\b': *code = 0x0E; return true;
+    case '\t': *code = 0x0F; return true;
+    case ' ': *code = 0x39; return true;
+    case '-': *code = 0x0C; return true;
+    case '=': *code = 0x0D; return true;
+    case '[': *code = 0x1A; return true;
+    case ']': *code = 0x1B; return true;
+    case ';': *code = 0x27; return true;
+    case '\'': *code = 0x28; return true;
+    case '`': *code = 0x29; return true;
+    case '\\': *code = 0x2B; return true;
+    case ',': *code = 0x33; return true;
+    case '.': *code = 0x34; return true;
+    case '/': *code = 0x35; return true;
+    default:
+        return false;
+    }
+}
+
+static void kbd_send_scancode(uint8_t scancode) {
+    kbd_feed_scancode(scancode);
+    kbd_feed_scancode(scancode | 0x80);
+}
+
+void kbd_feed_ascii(char c) {
+    uint8_t code;
+    bool need_shift;
+    if (c == '\r') {
+        c = '\n';
+    }
+    if (!ascii_to_scancode(c, &code, &need_shift)) {
+        if (c == '\n' || c == '\b' || c == '\t' || (c >= 32 && c <= 126)) {
+            kbd_buffer_put(c);
+        }
+        return;
+    }
+    if (need_shift) {
+        kbd_feed_scancode(0x2A);
+    }
+    kbd_send_scancode(code);
+    if (need_shift) {
+        kbd_feed_scancode(0xAA);
+    }
+}
+
+void kbd_feed_scancode(uint8_t scancode) {
+    if (scancode & 0x80) {
+        uint8_t code = scancode & 0x7F;
+        if (code == 0x2A || code == 0x36) {
+            shift_pressed = false;
+        }
+        return;
+    }
+    if (scancode == 0x2A || scancode == 0x36) {
+        shift_pressed = true;
+        return;
+    }
+    char ch = shift_pressed ? kbd_us_shift[scancode] : kbd_us[scancode];
+    if (ch == 0) {
+        return;
+    }
+    kbd_buffer_put(ch);
 }
 
 void keyboard_init(void) {

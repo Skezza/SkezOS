@@ -36,12 +36,14 @@ void pmm_init(uint32_t mem_upper) {
      * part of the kernel in a real system, so a real PMM should call
      * pmm_alloc_frame() to allocate space for the bitmap itself.
      * However for demonstration purposes this suffices. */
-    frames = (uint32_t *)0x00100000;
+    /* Place the bitmap well above the kernel image to avoid overwriting code.
+       0x01000000 (16 MiB) is safely within the 1 GiB limit and typically free. */
+    frames = (uint32_t *)0x01000000;
     uint32_t words = bitmap_size_bytes / sizeof(uint32_t);
     for (uint32_t i = 0; i < words; i++)
         frames[i] = 0xFFFFFFFF; /* mark all frames used */
-    /* Free frames above 1MiB */
-    for (uint32_t i = 0x100000 / FRAME_SIZE; i < nframes; i++)
+    /* Free frames above the bitmap start address */
+    for (uint32_t i = 0x01000000 / FRAME_SIZE; i < nframes; i++)
         clear_frame(i);
     serial_writestr("pmm: ready\n");
 }

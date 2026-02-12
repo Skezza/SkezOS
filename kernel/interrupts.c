@@ -51,9 +51,9 @@ __attribute__((interrupt)) void isr_page_fault(struct interrupt_frame *frame, ui
     panic("Page fault");
 }
 
-/* Install the ISRs into the IDT, remap the PIC and enable
- * interrupts.  IRQ handlers are not installed in this minimal example
- * but could be added later. */
+/* Install the ISRs into the IDT and remap the PIC.
+ * Hardware IRQ lines remain masked until the IRQ subsystem and drivers
+ * explicitly unmask the lines they need. */
 void interrupts_install(void) {
     /* Set up default handlers for the first 32 vectors. */
     for (int i = 0; i < 32; i++) {
@@ -65,10 +65,7 @@ void interrupts_install(void) {
     idt_install();
     /* Remap the PIC so that IRQs start at vector 32 (0x20) */
     pic_remap(0x20, 0x28);
-    /* Unmask all IRQ lines.  In a real kernel you would mask
-     * everything until drivers are installed. */
-    outb(0x21, 0x00);
-    outb(0xA1, 0x00);
-    /* Enable interrupts */
-    __asm__ __volatile__("sti");
+    /* Keep all IRQ lines masked until irq_init()/driver setup runs. */
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
 }

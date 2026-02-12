@@ -11,6 +11,14 @@
 #include "timer.h"
 #include "keyboard.h"
 
+static void handle_input_char(char c) {
+    serial_writechar(c);
+    vga_putc(c);
+    serial_writestr("\nReceived: ");
+    serial_writechar(c);
+    serial_writechar('\n');
+}
+
 void kmain(uint32_t magic, uint32_t mb2_addr) {
     // Initialize serial and VGA outputs
     serial_init();
@@ -20,7 +28,6 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
 
     // Parse memory map and initialize memory management
     memmap_parse(magic, mb2_addr);
-    pmm_init();
 
     // Setup paging and enable it
     paging_init();
@@ -48,15 +55,27 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     serial_writestr("kernel initialised\n");
     vga_puts("kernel initialised\n");
 
-    // Loop forever, echoing typed characters
+    // Prompt for user input on the serial console
+    serial_writestr("Ready> ");
+    vga_puts("Ready> ");
+
+    // Loop forever, consuming keyboard and serial input.
+    // Serial input is injected into the keyboard path for one unified queue.
     for (;;) {
         int ch = kbd_getchar();
-        if (ch != -1) {
-            char c = (char)ch;
-            serial_writechar(c);
-            vga_putc(c);
+        if (ch == -1) {
+            int serial_ch = serial_readchar();
+            if (serial_ch != -1) {
+                kbd_feed_ascii((char)serial_ch);
+                ch = kbd_getchar();
+                if (ch == -1) {
+                    ch = serial_ch;
+                }
+            }
         }
-        // Halt CPU until next interrupt to save power
+        if (ch != -1) {
+            handle_input_char((char)ch);
+        }
         __asm__ __volatile__("hlt");
     }
 }

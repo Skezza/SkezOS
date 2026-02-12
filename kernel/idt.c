@@ -9,6 +9,12 @@ static idt_ptr_t idt_desc;
 /* The assembly routine to load the IDT, provided in idt_load.S. */
 extern void idt_load(uint32_t);
 
+static uint16_t idt_code_selector(void) {
+    uint16_t cs;
+    __asm__ __volatile__("mov %%cs, %0" : "=r"(cs));
+    return cs;
+}
+
 static void idt_set_entry(int i, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[i].offset_low = base & 0xFFFF;
     idt[i].selector   = sel;
@@ -19,7 +25,7 @@ static void idt_set_entry(int i, uint32_t base, uint16_t sel, uint8_t flags) {
 
 void idt_set_gate(uint8_t n, uint32_t handler) {
     /* 0x8E = present | ring 0 | 32‑bit interrupt gate */
-    idt_set_entry(n, handler, 0x08, 0x8E);
+    idt_set_entry(n, handler, idt_code_selector(), 0x8E);
 }
 
 void idt_install(void) {

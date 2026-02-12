@@ -13,4 +13,7 @@ void serial_writechar(char c);
  * terminals expect a CR before LF. */
 void serial_writestr(const char *s);
 
+/* Read a character from the serial port if available, or -1 otherwise. */
+int serial_readchar(void);
+
 #endif /* SERIAL_H */
