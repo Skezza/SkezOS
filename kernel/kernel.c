@@ -23,8 +23,20 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     // Initialize serial and VGA outputs
     serial_init();
     vga_clear();
-    serial_writestr("TinyOS booting...\n");
-    vga_puts("TinyOS booting...\n");
+    // ASCII logo for SkezOS
+    const char *logo =
+        " ad88888ba   88                                 ,ad8888ba,     ad88888ba  \n"
+        "d8\"     \"8b  88                                d8\'    \`8b   d8\"     \"8b \n"
+        "Y8,          88                               d8\'        \`8b  Y8,         \n"
+        "`Y8aaaaa,    88   ,d8   ,adPPYba,  888888888  88          88  `Y8aaaaa,   \n"
+        "  \`\"\"\"\"\"8b,  88 ,a8\"   a8P_____88       a8P\"  88          88    \`\"\"\"\"\"8b, \n"
+        "        \`8b  8888[     8PP\"\"\"\"\"    ,d8P'    Y8,        ,8P          \`8b \n"
+        "Y8a     a8P  88\`\"Yba,  \"8b,   ,aa  ,d8\"        Y8a.    .a8P   Y8a     a8P \n"
+        " \"Y88888P\"   88   \`Y8a  \`\"Ybbd8\'\"  888888888    \`\"Y8888Y\'\"     \"Y88888P\"\n";
+    serial_writestr(logo);
+    vga_puts(logo);
+    serial_writestr("SkezOS booting...\n");
+    vga_puts("SkezOS booting...\n");
 
     // Parse memory map and initialize memory management
     memmap_parse(magic, mb2_addr);

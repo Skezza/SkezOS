@@ -15,7 +15,7 @@ LDFLAGS = -m elf_i386
 
 # Build directories
 BUILD = build
-ISO   = tinyos.iso
+ISO   = skezos.iso
 
 SRCS  = $(wildcard kernel/*.c)
 OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SRCS))
