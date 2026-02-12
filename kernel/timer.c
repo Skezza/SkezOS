@@ -9,9 +9,6 @@ volatile uint64_t timer_ticks = 0;
 static void timer_handler(void *ctx) {
     (void)ctx;
     timer_ticks++;
-    if (timer_ticks % 100 == 0) {
-        serial_writestr("tick\n");
-    }
 }
 
 void timer_init(uint32_t freq) {

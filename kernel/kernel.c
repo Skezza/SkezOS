@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include "serial.h"
 #include "vga.h"
 #include "panic.h"
@@ -12,11 +13,14 @@
 #include "keyboard.h"
 
 static void handle_input_char(char c) {
-    serial_writechar(c);
+    if (c == 0x16) {
+        bool verbose = !keyboard_is_verbose();
+        keyboard_set_verbose(verbose);
+        serial_writestr(verbose ? "\nVerbose keyboard logging enabled\n" : "\nVerbose keyboard logging disabled\n");
+        return;
+    }
     vga_putc(c);
-    serial_writestr("\nReceived: ");
     serial_writechar(c);
-    serial_writechar('\n');
 }
 
 void kmain(uint32_t magic, uint32_t mb2_addr) {

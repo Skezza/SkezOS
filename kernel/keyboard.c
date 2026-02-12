@@ -36,6 +36,7 @@ static const char kbd_us_shift[128] = {
 };
 
 static bool shift_pressed = false;
+static bool keyboard_verbose = false;
 
 static void kbd_buffer_put(char ch) {
     uint8_t next = (kbd_head + 1) % KBD_BUF_SIZE;
@@ -49,11 +50,12 @@ static void kbd_buffer_put(char ch) {
 static void keyboard_handler(void *ctx) {
     (void)ctx;
     uint8_t scancode = inb(0x60);
-    serial_writestr("IRQ1 scancode:");
-    serial_writechar(' ');
-    serial_writechar((scancode >> 4) < 10 ? '0' + (scancode >> 4) : 'A' + (scancode >> 4) - 10);
-    serial_writechar((scancode & 0xF) < 10 ? '0' + (scancode & 0xF) : 'A' + (scancode & 0xF) - 10);
-    serial_writechar('\n');
+    if (keyboard_verbose) {
+        serial_writestr("IRQ1 scancode: ");
+        serial_writechar(((scancode >> 4) & 0xF) < 10 ? '0' + ((scancode >> 4) & 0xF) : 'A' + ((scancode >> 4) & 0xF) - 10);
+        serial_writechar((scancode & 0xF) < 10 ? '0' + (scancode & 0xF) : 'A' + (scancode & 0xF) - 10);
+        serial_writestr("\n");
+    }
     if (scancode & 0x80) {
         /* Key release */
         uint8_t code = scancode & 0x7F;
@@ -186,4 +188,12 @@ void keyboard_init(void) {
     /* Register keyboard IRQ handler (IRQ1) and unmask it */
     irq_register(1, keyboard_handler, NULL);
     irq_mask(1, 0);
+}
+
+void keyboard_set_verbose(bool enabled) {
+    keyboard_verbose = enabled;
+}
+
+bool keyboard_is_verbose(void) {
+    return keyboard_verbose;
 }
