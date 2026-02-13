@@ -17,9 +17,11 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 2. `make` – compiles the kernel, links `kernel.elf`, copies it into `iso/boot`, and packages `skezos.iso`.
 3. `make run` or `qemu-system-i386 -cdrom skezos.iso` to boot it. Expect boot logs on serial/VGA and a confident page fault at the end.
 
+<img width="1124" height="858" alt="Screenshot from 2026-02-13 00-15-09" src="https://github.com/user-attachments/assets/a12490a1-f83a-4b03-827b-6973b0909c65" />
+
 ### Keep tinkering
 
-It’s intentionally minimal. Add a shell, a scheduler, disk drivers, a filesystem, whatever keeps you wired. It’s a creative experiment, so break stuff, fix it, and share what you learn.
+It’s intentionally minimal. I've not spent long. Add a shell, a scheduler, disk drivers, a filesystem, whatever keeps you wired. It’s a creative experiment, so break stuff, fix it, and share what you learn.
 
 ### License
 
