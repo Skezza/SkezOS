@@ -44,17 +44,13 @@ $(ISO): $(BUILD)/kernel.elf iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) iso > /dev/null 2>&1
 
 run: $(ISO)
-	# Run QEMU with graphical UI (GTK) and forward COM1 to this terminal.
-	# Using "mon:stdio" keeps stdin input reliable when piping data at launch.
-	# -no-reboot prevents automatic reboot on triple fault.
-	# -no-shutdown keeps QEMU running even if the guest issues a shutdown.
+	# Runs QEMU with graphical UI (GTK) and forward COM1 to this terminal.
+	# Using "mon:stdio" keeps stdin input reliable when piped input at launch.
 	qemu-system-i386 \
 		-cdrom $(ISO) \
 		-display gtk \
 		-serial mon:stdio \
 		-monitor none \
-		-no-reboot \
-		-no-shutdown
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.elf
