@@ -3,7 +3,9 @@
 
 typedef void (*irq_fn_t)(void *ctx);
 
-/* Register an IRQ handler for a given IRQ number (0-15). Returns 0 on success, -1 on error. */
+/* Register an IRQ handler for a given IRQ number (0-15).
+ * Returns 0 on success, or a negative -KERR_* code on error.
+ */
 int irq_register(int irq, irq_fn_t handler, void *ctx);
 
 /* Unregister the handler for a given IRQ number. */

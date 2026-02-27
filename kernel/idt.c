@@ -28,13 +28,16 @@ void idt_set_gate(uint8_t n, uint32_t handler) {
     idt_set_entry(n, handler, idt_code_selector(), 0x8E);
 }
 
+void idt_set_gate_user(uint8_t n, uint32_t handler) {
+    /* 0xEE = present | ring 3 | 32-bit interrupt gate */
+    idt_set_entry(n, handler, idt_code_selector(), 0xEE);
+}
+
 void idt_install(void) {
     idt_desc.limit = sizeof(idt) - 1;
     idt_desc.base  = (uint32_t)&idt;
-    /* Zero the table before loading.  Without this some entries may
-     * contain garbage from BSS initialisation. */
-    for (int i = 0; i < 256; i++) {
-        idt_set_entry(i, 0, 0, 0);
-    }
+    /* The IDT lives in BSS and starts zeroed. Callers populate entries
+     * before loading; do not wipe them here.
+     */
     idt_load((uint32_t)&idt_desc);
 }

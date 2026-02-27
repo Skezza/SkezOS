@@ -11,6 +11,7 @@ SECTIONS
   /* The kernel is loaded at 1MiB in physical memory.  GRUB
    * automatically relocates the image for us.  */
   . = 1M;
+  __kernel_start = .;
 
   /* Text (code) segment.  The multiboot header must be kept at the
    * beginning of the text section so that GRUB can find it.  */
@@ -34,4 +35,6 @@ SECTIONS
     *(.bss*)
     *(COMMON)
   }
+
+  __kernel_end = ALIGN(4K);
 }
