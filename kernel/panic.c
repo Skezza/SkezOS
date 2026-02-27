@@ -1,16 +1,21 @@
 #include "panic.h"
-#include "serial.h"
-#include "vga.h"
+#include "klog.h"
 
-/* Print a panic message and halt the CPU. */
-void panic(const char *msg) {
-    serial_writestr("PANIC: ");
-    serial_writestr(msg);
-    serial_writestr("\n");
-    vga_puts("PANIC: ");
-    vga_puts(msg);
-    vga_puts("\n");
+static void panic_halt(void) __attribute__((noreturn));
+
+static void panic_halt(void) {
+    __asm__ __volatile__("cli");
     for (;;) {
         __asm__ __volatile__("hlt");
     }
+}
+
+void panic(const char *msg) {
+    KLOGP("%s", msg);
+    panic_halt();
+}
+
+void panic_assert_failed(const char *expr, const char *file, uint32_t line) {
+    KLOGP("assertion failed: %s (%s:%u)", expr, file, line);
+    panic_halt();
 }

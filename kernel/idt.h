@@ -25,6 +25,9 @@ typedef struct {
  * construction of the descriptor fields. */
 void idt_set_gate(uint8_t n, uint32_t handler);
 
+/* Same as idt_set_gate but allows user-mode invocation (DPL=3). */
+void idt_set_gate_user(uint8_t n, uint32_t handler);
+
 /* Load the IDT register with our table.  Should be called after
  * setting up your gates. */
 void idt_install(void);

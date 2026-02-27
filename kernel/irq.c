@@ -1,4 +1,5 @@
 #include "irq.h"
+#include "kerrno.h"
 #include "utils.h"
 
 struct irq_entry {
@@ -10,7 +11,7 @@ static struct irq_entry irq_handlers[16];
 
 int irq_register(int irq, irq_fn_t handler, void *ctx) {
     if (irq < 0 || irq >= 16) {
-        return -1;
+        return -KERR_INVAL;
     }
     irq_handlers[irq].handler = handler;
     irq_handlers[irq].ctx = ctx;

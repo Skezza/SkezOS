@@ -21,22 +21,26 @@ static inline void pic_send_eoi(int irq) {
 extern void irq_dispatch(int irq);
 extern void irq_mask(int irq, int masked);
 
-__attribute__((interrupt)) void irq0_stub(struct interrupt_frame *frame) { irq_dispatch(0); pic_send_eoi(0); }
-__attribute__((interrupt)) void irq1_stub(struct interrupt_frame *frame) { irq_dispatch(1); pic_send_eoi(1); }
-__attribute__((interrupt)) void irq2_stub(struct interrupt_frame *frame) { irq_dispatch(2); pic_send_eoi(2); }
-__attribute__((interrupt)) void irq3_stub(struct interrupt_frame *frame) { irq_dispatch(3); pic_send_eoi(3); }
-__attribute__((interrupt)) void irq4_stub(struct interrupt_frame *frame) { irq_dispatch(4); pic_send_eoi(4); }
-__attribute__((interrupt)) void irq5_stub(struct interrupt_frame *frame) { irq_dispatch(5); pic_send_eoi(5); }
-__attribute__((interrupt)) void irq6_stub(struct interrupt_frame *frame) { irq_dispatch(6); pic_send_eoi(6); }
-__attribute__((interrupt)) void irq7_stub(struct interrupt_frame *frame) { irq_dispatch(7); pic_send_eoi(7); }
-__attribute__((interrupt)) void irq8_stub(struct interrupt_frame *frame) { irq_dispatch(8); pic_send_eoi(8); }
-__attribute__((interrupt)) void irq9_stub(struct interrupt_frame *frame) { irq_dispatch(9); pic_send_eoi(9); }
-__attribute__((interrupt)) void irq10_stub(struct interrupt_frame *frame) { irq_dispatch(10); pic_send_eoi(10); }
-__attribute__((interrupt)) void irq11_stub(struct interrupt_frame *frame) { irq_dispatch(11); pic_send_eoi(11); }
-__attribute__((interrupt)) void irq12_stub(struct interrupt_frame *frame) { irq_dispatch(12); pic_send_eoi(12); }
-__attribute__((interrupt)) void irq13_stub(struct interrupt_frame *frame) { irq_dispatch(13); pic_send_eoi(13); }
-__attribute__((interrupt)) void irq14_stub(struct interrupt_frame *frame) { irq_dispatch(14); pic_send_eoi(14); }
-__attribute__((interrupt)) void irq15_stub(struct interrupt_frame *frame) { irq_dispatch(15); pic_send_eoi(15); }
+/* IRQ0 is acknowledged before dispatch so the timer handler can
+ * safely preempt/switch tasks while the interrupted kernel stack is
+ * suspended. Other IRQs keep the usual ack-after-dispatch behavior.
+ */
+__attribute__((interrupt)) void irq0_stub(struct interrupt_frame *frame) { (void)frame; pic_send_eoi(0); irq_dispatch(0); }
+__attribute__((interrupt)) void irq1_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(1); pic_send_eoi(1); }
+__attribute__((interrupt)) void irq2_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(2); pic_send_eoi(2); }
+__attribute__((interrupt)) void irq3_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(3); pic_send_eoi(3); }
+__attribute__((interrupt)) void irq4_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(4); pic_send_eoi(4); }
+__attribute__((interrupt)) void irq5_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(5); pic_send_eoi(5); }
+__attribute__((interrupt)) void irq6_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(6); pic_send_eoi(6); }
+__attribute__((interrupt)) void irq7_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(7); pic_send_eoi(7); }
+__attribute__((interrupt)) void irq8_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(8); pic_send_eoi(8); }
+__attribute__((interrupt)) void irq9_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(9); pic_send_eoi(9); }
+__attribute__((interrupt)) void irq10_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(10); pic_send_eoi(10); }
+__attribute__((interrupt)) void irq11_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(11); pic_send_eoi(11); }
+__attribute__((interrupt)) void irq12_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(12); pic_send_eoi(12); }
+__attribute__((interrupt)) void irq13_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(13); pic_send_eoi(13); }
+__attribute__((interrupt)) void irq14_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(14); pic_send_eoi(14); }
+__attribute__((interrupt)) void irq15_stub(struct interrupt_frame *frame) { (void)frame; irq_dispatch(15); pic_send_eoi(15); }
 
 /* Table of stub pointers for convenience */
 static void (*irq_stub_table[16])(struct interrupt_frame *) = {

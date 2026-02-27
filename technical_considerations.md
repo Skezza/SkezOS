@@ -1,5 +1,24 @@
 # SkezOS Technical Considerations
 
+## Current sequencing note (2026-02-27)
+
+Recommended active milestone after Phase 5 lifecycle hardening:
+
+- Phase 6: userland workflow + shell bootstrap
+- focus on shared userspace syscall wrappers, boot-to-shell flow, and first user-facing `/bin` tools
+
+Rationale: process/FD lifecycle behavior is now deterministic enough that shell and command execution can move forward on a stable base.
+
+Phase 5 progress status:
+- process-owned FD table wiring and `waitpid` synchronization are in place
+- transient task-stack and loader-scratch allocations are reclaimed via large-block `kfree`
+
+Phase 6 bootstrap status:
+- shared assembly syscall/runtime includes now back the current `/bin/hello*.elf` demos
+- `make` rebuilds the initramfs blob from `userland/` sources automatically and now also builds the first mixed C/assembly userland tools
+- the kernel now boots a direct `/bin/sh.elf` fixed-slot shell task, hands `/dev/console` input to the shell, and `make qemu-smoke-phase6` checks real command execution
+- the active remaining bottlenecks are argv/exec generalization and moving beyond the fixed-slot spawn table, not shell input handoff
+
 ## 1) Architecture boundaries
 
 Define strict subsystem boundaries now:
