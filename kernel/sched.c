@@ -163,7 +163,7 @@ static void sched_reap_task_locked(struct task *task) {
     pid = task->pid;
     sched_copy_task_name(name, task->name);
     stack_base = task->stack_base;
-    if (task->exec_mode == TASK_EXEC_USER_BOOTSTRAP) {
+    if (task->name[0] != '\0') {
         usermode_notify_task_reaped(task->name);
     }
     if (stack_base) {
@@ -821,7 +821,7 @@ static void sched_task_exit(void) {
             self->state = TASK_ZOMBIE;
             sched_maybe_wake_parent_waiter_locked(self->parent_pid, self->pid);
         } else {
-            if (self->exec_mode == TASK_EXEC_USER_BOOTSTRAP) {
+            if (self->name[0] != '\0') {
                 usermode_notify_task_reaped(self->name);
             }
             if (g_deferred_stack_free) {
