@@ -296,7 +296,7 @@ static struct task *sched_pick_next_locked(void) {
     for (uint32_t n = 0; n < SCHED_MAX_TASKS; n++) {
         uint32_t idx = (start + n) % SCHED_MAX_TASKS;
         struct task *t = &g_tasks[idx];
-        if (t == g_current_task) {
+        if (t == g_current_task || t == g_idle_task) {
             continue;
         }
         if (t->state == TASK_RUNNABLE) {

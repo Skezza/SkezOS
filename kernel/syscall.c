@@ -72,17 +72,17 @@ static int syscall_stdio_kfile_for_fd(uint32_t fd, int for_write, struct kfile *
     }
     *out_file = 0;
 
+    rc = syscall_stdio_path_for_fd(fd, for_write, &path);
+    if (rc < 0) {
+        return rc;
+    }
+
     rc = sched_current_process_fd_get(fd, &cached);
     if (rc == 0) {
         *out_file = cached;
         return 0;
     }
     if (rc != -KERR_NOENT) {
-        return rc;
-    }
-
-    rc = syscall_stdio_path_for_fd(fd, for_write, &path);
-    if (rc < 0) {
         return rc;
     }
     rc = vfs_open(path, 0, &opened);
@@ -246,6 +246,10 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     }
     if (options != 0U) {
         return syscall_ret_err(KERR_NOTSUP);
+    }
+    if (status_ptr != 0U &&
+        !uaccess_user_range_ok(status_ptr, (uint32_t)sizeof(waited_exit))) {
+        return syscall_ret_err(KERR_FAULT);
     }
 
     rc = sched_waitpid(target_pid, &waited_pid, &waited_exit);
