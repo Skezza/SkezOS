@@ -305,7 +305,15 @@ qemu-smoke-phase6:
 	@rm -f $(BUILD)/qemu-smoke-phase6.log
 	@echo "[qemu-smoke-phase6] Booting headless VM with scripted shell input..."
 	@rc=0; \
-	( sleep 2; printf 'help\necho phase6 interactive echo\ncat readme.txt\nexit\n' ) | \
+	{ sleep 2; \
+		printf 'help\n'; \
+		sleep 1; \
+		printf 'echo phase6 interactive echo\n'; \
+		sleep 1; \
+		printf 'cat readme.txt\n'; \
+		sleep 1; \
+		printf 'exit\n'; \
+	} | \
 	timeout -s INT -k 2s $(SMOKE_TIMEOUT_SECS)s $(QEMU) \
 		-cdrom $(ISO) \
 		-display none \

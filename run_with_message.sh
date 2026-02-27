@@ -6,13 +6,13 @@ cat <<'BANNER'
 
 ┌─────────────────────────────────────────────────────────┐
 │  You can send text to SkezOS by piping stdin to QEMU's  │
-│  COM1 (serial) and watch the kernel echo it back.       │   
-|  This is already configured in the makefile.            |
+│  COM1 (serial) and watch the kernel echo it back.       │
+│  This is already configured in the Makefile.            │
 └─────────────────────────────────────────────────────────┘
 
 BANNER
 
-echo "joe@joe-ThinkPad-T480:~/SkezOZ$ printf 'Hi Joe\\\\n | make run'"
+echo "joe@joe-ThinkPad-T480:~/SkezOZ$ printf 'Hi Joe\\\\n' | make run"
 #echo "Pipes 'Hi Joe' into QEMU's serial console (COM1). The guest kernel receives this as serial input, prints on the VGA display."
 
 cat <<'FOOTER'
