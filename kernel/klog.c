@@ -84,10 +84,13 @@ void klog_serial_raw(const char *s) {
 }
 
 void klogf(klog_level_t level, const char *fmt, ...) {
+    uint32_t saved_flags;
+
     if (level < g_klog_min_level) {
         return;
     }
 
+    saved_flags = vga_console_enter_critical();
     klog_write_char(level, '[');
     klog_write_str(level, klog_level_name(level));
     klog_write_str(level, "] ");
@@ -143,4 +146,5 @@ void klogf(klog_level_t level, const char *fmt, ...) {
     va_end(ap);
 
     klog_write_char(level, '\n');
+    vga_console_leave_critical(saved_flags);
 }

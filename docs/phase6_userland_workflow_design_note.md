@@ -32,8 +32,23 @@ The interactive Phase 6 bootstrap slice is now in place:
 - `SYS_SPAWN_EX` and `SYS_GETCMDLINE` now provide a narrow flat-cmdline handoff, so `/bin/echo.elf` and `/bin/cat.elf` run as real external tools
 - child launch now inspects fixed-address ET_EXEC images directly instead of relying on a per-path kernel whitelist, while boot shell startup remains fixed-slot
 - `make qemu-smoke-phase6` now drives the shell through serial input, asserts external `echo`/`cat`, and checks unknown-command failure handling
+- VGA text output now scrolls instead of wrapping over the boot banner, and background worker demo logs stay quiet after the shell takes console ownership
 
 This closes the console handoff blocker and proves the first end-to-end userland workflow. The phase still intentionally keeps the runtime narrow: there is no argv support, no relocatable/dynamic loader, and stdin remains pinned to the shell rather than the foreground child.
+
+## Follow-on status (2026-02-28)
+
+The immediate post-Phase-6 ergonomics slice has now landed on top of this baseline:
+
+- `/dev/console` input ownership is now PID-based rather than hard-coded to the task name `user-shell`
+- the synchronous `waitpid()` path temporarily hands stdin to the waited foreground child, then restores ownership to the shell when the child exits
+- `SYS_SPAWN_EX` still takes a narrow flat-cmdline request, but the kernel launch path now builds a minimal `argc/argv` startup frame for spawned children
+- `/bin/echo.elf` and `/bin/cat.elf` now consume `argc/argv` directly instead of depending on `SYS_GETCMDLINE`
+- `ps` is no longer a stub: `SYS_TASK_SNAPSHOT` returns a bounded task snapshot used by the shell builtin
+- a small `SYS_SLEEP` syscall is now available, and the shell plus `/bin/readln.elf` use it to avoid hot-spinning when stdin is temporarily empty
+- `make qemu-smoke-phase6` now also validates a tiny `/bin/readln.elf` stdin handoff path alongside `ps`, `echo`, `cat`, and unknown-command failure handling
+
+This keeps the shell deliberately narrow while removing the most visible interaction/runtime limitations that remained immediately after Phase 6 proper.
 
 ## Target user-visible outcome
 
@@ -42,7 +57,9 @@ On every boot, the system should reliably reach a simple userspace command loop 
 - print help
 - launch binaries from `/bin`
 - wait for child completion
-- run basic tools like `echo` and `cat` (with `ps` still a stub until process-listing has a real kernel interface)
+- run basic tools like `echo` and `cat`
+- hand stdin to a synchronous foreground child when needed
+- inspect a bounded task snapshot through `ps`
 
 ## Implementation order
 
@@ -61,9 +78,9 @@ Keep the first shell intentionally narrow:
 - single-line command input
 - whitespace tokenization only
 - builtins currently include `help`, `wait`, `ps`, and `exit`
-- external command execution resolves `/bin/<name>.elf` and hands the remainder of the line to the child as one flat cmdline string
+- external command execution resolves `/bin/<name>.elf` and still uses one flat cmdline string as the spawn request shape
 - synchronous foreground execution only
-- no argv handoff to child processes yet (children receive one raw string and must parse it themselves if needed)
+- foreground stdin handoff only; no background ownership or job control
 
 Do not add pipes, redirection, or job control in the initial shell.
 
@@ -71,9 +88,9 @@ Do not add pipes, redirection, or job control in the initial shell.
 
 Minimum shared userspace support should provide:
 
-- stable syscall wrappers for `write`, `read`, `exit`, `spawn`, `spawn_ex`, `getcmdline`, `waitpid`, `open`, `close`, `yield`, `time`
+- stable syscall wrappers for `write`, `read`, `exit`, `spawn`, `spawn_ex`, `getcmdline`, `waitpid`, `open`, `close`, `yield`, `time`, `task_snapshot`
 - string helpers needed by the first shell/tools
-- a small `_start` convention that hands control to a C-like `main` entry later, if desired
+- a small `_start` convention that can support a C-like `main(argc, argv)` entry when needed
 
 The ABI boundary now stops being copied ad hoc into each program. The legacy `spawn` ABI remains path-only for compatibility, while `spawn_ex` adds the narrow cmdline handoff used by the shell.
 
@@ -95,6 +112,7 @@ Current validation evidence for the interactive slice:
 - `make qemu-smoke-phase5`
 - `make qemu-smoke-userfault`
 - `make qemu-smoke-phase6`
+- `make check`
 
 ## Non-goals
 
@@ -113,7 +131,8 @@ Current validation evidence for the interactive slice:
 ## Remaining limitations
 
 - `SYS_SPAWN_EX` now inspects fixed-address ET_EXEC images directly and uses a reusable child stack pool, so new `/bin` tools no longer need kernel path-whitelist wiring
-- console read ownership is currently pinned to `user-shell` itself; foreground children are spawned and waited synchronously, but they are not handed stdin yet
 - the shell is intentionally foreground-only and does not implement pipes, redirection, quoting, escaping, or job control
-- argument handoff is still cmdline-only (`SYS_GETCMDLINE`), not a real `argc/argv` startup ABI
-- `ps` is intentionally a stub until a real process-introspection kernel interface exists
+- shell parsing is still whitespace-only; there is still no quoting or escape handling
+- console reads remain non-blocking, so simple foreground readers still poll once per tick via `SYS_SLEEP` rather than blocking in the kernel
+- the task snapshot exposed to `ps` is intentionally bounded and minimal; there is no `/proc` model or richer introspection interface yet
+- boot shell startup remains fixed-slot and user binaries are still fixed-address ET_EXEC images; this slice does not attempt PIE or relocatable loading

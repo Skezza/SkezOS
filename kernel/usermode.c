@@ -26,6 +26,7 @@ static int g_user_shell_spawned;
 
 #define USERMODE_SPAWN_PATH_MAX 64U
 #define USERMODE_CMDLINE_MAX    128U
+#define USERMODE_ARG_MAX        16U
 
 struct usermode_elf_demo_cfg {
     const char *path;
@@ -139,6 +140,10 @@ static int usermode_str_eq(const char *a, const char *b) {
     return a[i] == '\0' && b[i] == '\0';
 }
 
+static int usermode_is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
 static int usermode_copy_cstr(char *dst, uint32_t dst_cap, const char *src) {
     uint32_t i;
 
@@ -154,6 +159,84 @@ static int usermode_copy_cstr(char *dst, uint32_t dst_cap, const char *src) {
     }
     dst[dst_cap - 1U] = '\0';
     return -KERR_INVAL;
+}
+
+static int usermode_prepare_child_start_stack(const struct usermode_child_slot *slot,
+                                              uint32_t stack_top,
+                                              uint32_t *out_entry_esp) {
+    const char *argv_src[USERMODE_ARG_MAX];
+    uint32_t argv_len[USERMODE_ARG_MAX];
+    uint32_t argv_user[USERMODE_ARG_MAX];
+    uint32_t argc = 0;
+    uint32_t sp = stack_top;
+    uint32_t argv_table_addr;
+    uint32_t frame_addr;
+    uint32_t idx = 0;
+
+    if (!slot || !out_entry_esp) {
+        return -KERR_INVAL;
+    }
+    if (slot->path[0] == '\0') {
+        return -KERR_INVAL;
+    }
+
+    argv_src[argc] = slot->path;
+    argv_len[argc] = (uint32_t)strlen(slot->path);
+    argc++;
+
+    while (idx < slot->cmdline_len) {
+        uint32_t start;
+
+        while (idx < slot->cmdline_len && usermode_is_space(slot->cmdline[idx])) {
+            idx++;
+        }
+        if (idx >= slot->cmdline_len) {
+            break;
+        }
+
+        start = idx;
+        while (idx < slot->cmdline_len && !usermode_is_space(slot->cmdline[idx])) {
+            idx++;
+        }
+        if (argc >= USERMODE_ARG_MAX) {
+            return -KERR_NOMEM;
+        }
+
+        argv_src[argc] = slot->cmdline + start;
+        argv_len[argc] = idx - start;
+        argc++;
+    }
+
+    for (uint32_t i = argc; i > 0U; i--) {
+        uint32_t arg_len = argv_len[i - 1U];
+
+        if (sp < slot->stack_base + arg_len + 1U) {
+            return -KERR_NOMEM;
+        }
+        sp -= arg_len + 1U;
+        memcpy((void *)(uintptr_t)sp, argv_src[i - 1U], arg_len);
+        ((char *)(uintptr_t)sp)[arg_len] = '\0';
+        argv_user[i - 1U] = sp;
+    }
+
+    sp &= ~0x3U;
+    if (sp < slot->stack_base + ((argc + 4U) * (uint32_t)sizeof(uint32_t))) {
+        return -KERR_NOMEM;
+    }
+
+    argv_table_addr = sp - ((argc + 1U) * (uint32_t)sizeof(uint32_t));
+    for (uint32_t i = 0; i < argc; i++) {
+        ((uint32_t *)(uintptr_t)argv_table_addr)[i] = argv_user[i];
+    }
+    ((uint32_t *)(uintptr_t)argv_table_addr)[argc] = 0U;
+
+    frame_addr = argv_table_addr - (3U * (uint32_t)sizeof(uint32_t));
+    ((uint32_t *)(uintptr_t)frame_addr)[0] = 0U;
+    ((uint32_t *)(uintptr_t)frame_addr)[1] = argc;
+    ((uint32_t *)(uintptr_t)frame_addr)[2] = argv_table_addr;
+
+    *out_entry_esp = frame_addr;
+    return 0;
 }
 
 static struct usermode_child_slot *usermode_child_slot_acquire(uint32_t image_base, uint32_t image_size) {
@@ -299,6 +382,9 @@ static void usermode_elf_demo_task(void *arg) {
                                           image.image_size,
                                           cfg->stack_base,
                                           cfg->stack_size) == 0);
+    if (cfg == &g_user_shell_cfg) {
+        KASSERT(vfs_console_set_input_owner_task(sched_current_task_pid()) == 0);
+    }
     KASSERT(sched_mark_current_task_user_bootstrap(image.entry_eip, image.stack_top) == 0);
     KLOGI("usermode: entering ring3 %s path=%s eip=%x esp=%x",
           cfg->tag, cfg->path, image.entry_eip, image.stack_top);
@@ -308,6 +394,7 @@ static void usermode_elf_demo_task(void *arg) {
 static void usermode_child_slot_task(void *arg) {
     struct usermode_child_slot *slot = (struct usermode_child_slot *)arg;
     struct elf32_user_image image;
+    uint32_t entry_esp;
     int rc;
 
     if (!slot) {
@@ -329,10 +416,16 @@ static void usermode_child_slot_task(void *arg) {
                                           slot->stack_base,
                                           slot->stack_size) == 0);
     KASSERT(sched_set_current_task_cmdline(slot->cmdline, slot->cmdline_len) == 0);
-    KASSERT(sched_mark_current_task_user_bootstrap(image.entry_eip, image.stack_top) == 0);
+    rc = usermode_prepare_child_start_stack(slot, image.stack_top, &entry_esp);
+    if (rc < 0) {
+        KLOGW("usermode: failed to build argv for %s path=%s rc=%d",
+              slot->tag, slot->path, rc);
+        return;
+    }
+    KASSERT(sched_mark_current_task_user_bootstrap(image.entry_eip, entry_esp) == 0);
     KLOGI("usermode: entering ring3 %s path=%s eip=%x esp=%x",
-          slot->tag, slot->path, image.entry_eip, image.stack_top);
-    enter_user_mode(image.entry_eip, image.stack_top);
+          slot->tag, slot->path, image.entry_eip, entry_esp);
+    enter_user_mode(image.entry_eip, entry_esp);
 }
 
 int usermode_spawn_demo_task(void) {
@@ -399,7 +492,6 @@ int usermode_spawn_shell_task(void) {
     if (rc < 0) {
         return rc;
     }
-    vfs_console_set_input_owner(VFS_CONSOLE_INPUT_OWNER_USER_SHELL);
     g_user_shell_spawned = 1;
     return 0;
 }
@@ -486,7 +578,7 @@ void usermode_notify_task_reaped(const char *task_name) {
     }
     if (usermode_str_eq(task_name, "user-shell")) {
         g_user_shell_spawned = 0;
-        vfs_console_set_input_owner(VFS_CONSOLE_INPUT_OWNER_KERNEL);
+        vfs_console_set_input_owner_kernel();
         return;
     }
     slot = usermode_child_slot_by_task_name(task_name);

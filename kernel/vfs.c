@@ -26,6 +26,8 @@ struct vfs_static_dir {
 
 static struct vfs_node *g_vfs_root;
 static vfs_console_input_owner_t g_vfs_console_input_owner;
+static int g_vfs_console_input_owner_pid;
+static int g_vfs_console_write_locked;
 
 static int vfs_static_dir_lookup(struct vfs_node *dir,
                                  const char *name,
@@ -33,6 +35,8 @@ static int vfs_static_dir_lookup(struct vfs_node *dir,
                                  struct vfs_node **out_node);
 static int vfs_console_open(struct vfs_node *node, uint32_t open_flags, struct kfile *out_file);
 static int vfs_null_open(struct vfs_node *node, uint32_t open_flags, struct kfile *out_file);
+static void vfs_console_write_lock(void);
+static void vfs_console_write_unlock(void);
 
 static const struct vfs_node_ops g_vfs_static_dir_ops = {
     .lookup = vfs_static_dir_lookup,
@@ -113,21 +117,6 @@ static int vfs_name_eq(const char *lit, const char *name, uint32_t name_len) {
     return lit[name_len] == '\0';
 }
 
-static int vfs_str_eq(const char *a, const char *b) {
-    uint32_t i = 0;
-
-    if (!a || !b) {
-        return 0;
-    }
-    while (a[i] != '\0' && b[i] != '\0') {
-        if (a[i] != b[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return a[i] == '\0' && b[i] == '\0';
-}
-
 static int vfs_component_lookup(struct vfs_node *dir,
                                 const char *name,
                                 uint32_t name_len,
@@ -197,8 +186,8 @@ static int vfs_console_read(struct kfile *file, void *buf, uint32_t len, uint32_
     if (!buf && len != 0U) {
         return -KERR_INVAL;
     }
-    if (g_vfs_console_input_owner == VFS_CONSOLE_INPUT_OWNER_USER_SHELL &&
-        !vfs_str_eq(sched_current_task_name(), "user-shell")) {
+    if (g_vfs_console_input_owner == VFS_CONSOLE_INPUT_OWNER_USER_TASK &&
+        sched_current_task_pid() != g_vfs_console_input_owner_pid) {
         return 0;
     }
 
@@ -222,6 +211,7 @@ static int vfs_console_write(struct kfile *file, const void *buf, uint32_t len, 
     const char *s = (const char *)buf;
     (void)file;
 
+    vfs_console_write_lock();
     for (uint32_t i = 0; i < len; i++) {
         char c = s[i];
         if (c == '\n') {
@@ -233,7 +223,32 @@ static int vfs_console_write(struct kfile *file, const void *buf, uint32_t len, 
     if (out_written) {
         *out_written = len;
     }
+    vfs_console_write_unlock();
     return 0;
+}
+
+static void vfs_console_write_lock(void) {
+    for (;;) {
+        uint32_t saved_flags = vga_console_enter_critical();
+
+        if (!g_vfs_console_write_locked) {
+            g_vfs_console_write_locked = 1;
+            vga_console_leave_critical(saved_flags);
+            return;
+        }
+
+        vga_console_leave_critical(saved_flags);
+        if (sched_current_task_pid() > 0) {
+            sched_yield();
+        }
+    }
+}
+
+static void vfs_console_write_unlock(void) {
+    uint32_t saved_flags = vga_console_enter_critical();
+
+    g_vfs_console_write_locked = 0;
+    vga_console_leave_critical(saved_flags);
 }
 
 static const struct kfile_ops g_vfs_devnull_file_ops = {
@@ -344,6 +359,8 @@ struct vfs_node *vfs_get_root(void) {
 void vfs_init(void) {
     g_vfs_root = 0;
     g_vfs_console_input_owner = VFS_CONSOLE_INPUT_OWNER_KERNEL;
+    g_vfs_console_input_owner_pid = -1;
+    g_vfs_console_write_locked = 0;
     memset(g_vfs_root_entries, 0, sizeof(g_vfs_root_entries));
     g_vfs_root_dir.count = 0;
     KASSERT(vfs_set_root(&g_vfs_root_node) == 0);
@@ -428,14 +445,40 @@ int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file) {
     return node->ops->open(node, open_flags, out_file);
 }
 
-void vfs_console_set_input_owner(vfs_console_input_owner_t owner) {
-    g_vfs_console_input_owner = owner;
-    KLOGI("vfs: console input owner=%s",
-          owner == VFS_CONSOLE_INPUT_OWNER_USER_SHELL ? "user-shell" : "kernel");
+void vfs_console_set_input_owner_kernel(void) {
+    g_vfs_console_input_owner = VFS_CONSOLE_INPUT_OWNER_KERNEL;
+    g_vfs_console_input_owner_pid = -1;
+    KLOGI("vfs: console input owner=kernel");
+}
+
+int vfs_console_set_input_owner_task(int pid) {
+    if (pid <= 0) {
+        return -KERR_INVAL;
+    }
+
+    g_vfs_console_input_owner = VFS_CONSOLE_INPUT_OWNER_USER_TASK;
+    g_vfs_console_input_owner_pid = pid;
+    KLOGI("vfs: console input owner=pid=%d", pid);
+    return 0;
 }
 
 vfs_console_input_owner_t vfs_console_get_input_owner(void) {
     return g_vfs_console_input_owner;
+}
+
+int vfs_console_get_input_owner_pid(void) {
+    if (g_vfs_console_input_owner != VFS_CONSOLE_INPUT_OWNER_USER_TASK) {
+        return -1;
+    }
+    return g_vfs_console_input_owner_pid;
+}
+
+int vfs_console_input_owner_is_task(int pid) {
+    if (pid <= 0) {
+        return 0;
+    }
+    return g_vfs_console_input_owner == VFS_CONSOLE_INPUT_OWNER_USER_TASK &&
+           g_vfs_console_input_owner_pid == pid;
 }
 
 int vfs_console_poll_input_char(void) {

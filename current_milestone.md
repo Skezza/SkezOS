@@ -1,50 +1,52 @@
 # Current Milestone
 
 ## Milestone
-Name: Phase 6 - Userland workflow + shell bootstrap
-Target window: 4-8 weeks
+Name: Foreground process I/O and userland ergonomics
+Target window: 1-2 weeks
 Owner: joe + codex
 
 ## Objective
-Turn the stabilized Phase 5 process/runtime base into a usable command workflow:
-- boot into a shell (or init-launched shell) deterministically
-- stop hardcoding raw syscall ABI in each user program
-- execute first user-facing tools from `/bin`
+Close the main interaction/runtime gaps left after Phase 6 while keeping the shell intentionally narrow:
+- hand `/dev/console` stdin to synchronous foreground children and restore it after `waitpid()`
+- replace flat cmdline-only child startup with a minimal `argc/argv` ABI for spawned tools
+- make `ps` report a real bounded task snapshot instead of a stub message
 
 ## In scope
-- [x] Phase 5 complete: process-owned FDs, wait-driven lifecycle, deterministic transient allocation reclamation
-- [x] Minimal userspace syscall wrapper/runtime layer
-- [x] Bootstrap shell or init-to-shell execution path
-- [x] First user-facing tools (`echo`, `cat`, `ps`, equivalent minimal set)
-- [x] Dedicated Phase 6 smoke coverage for boot-to-shell command execution
+- [x] PID-based `/dev/console` input ownership for one user task at a time
+- [x] Foreground stdin handoff for the synchronous `spawn` + `waitpid` path
+- [x] Minimal `argc/argv` startup stack for spawned user binaries
+- [x] Shell builtin `ps` backed by a bounded kernel task snapshot
+- [x] Dedicated smoke coverage for stdin handoff + real `ps`
+- [x] Preserve Phase 6 regressions under `make check`
 
 ## Out of scope
 - [x] Full POSIX shell parsing / quoting / expansion
-- [x] Pipes, redirection, background jobs
+- [x] Pipes, redirection, background jobs, job control
 - [x] Writable filesystem support
+- [x] PIE / relocatable user binaries
 - [x] Dynamic linking
 
 ## Tasks
-- [x] Write Phase 6 design note (`docs/phase6_userland_workflow_design_note.md`) (`done`)
-- [x] Add shared userspace syscall wrapper layer (`done`)
-- [x] Define a minimal common userspace startup/runtime convention (`done`, assembly-first via shared include macros)
-- [x] Decide bootstrap entry (`/bin/sh.elf` direct) and wire kernel launch path (`done`)
-- [x] Implement first shell command loop (`done`: console handoff + prompt/read/dispatch loop + foreground wait path)
-- [x] Add first user-facing `/bin` tools using shared wrappers (`done`: external `/bin/cat.elf` + `/bin/echo.elf` now consume a flat inherited cmdline)
-- [x] Add preliminary `qemu-smoke-phase6` target (boot -> shell banner/prompt) (`done`)
-- [x] Extend `qemu-smoke-phase6` to assert shell-driven command execution (`done`)
+- [x] Replace shell-name-based console input ownership with PID-based ownership (`done`)
+- [x] Hand stdin to a waited foreground child and restore it to the shell after `waitpid()` (`done`)
+- [x] Build a minimal `argc/argv` startup frame from `SYS_SPAWN_EX` cmdline data (`done`)
+- [x] Move `/bin/echo.elf` and `/bin/cat.elf` over to `argc/argv` (`done`)
+- [x] Replace the stub `ps` builtin with a bounded kernel snapshot syscall (`done`)
+- [x] Add one tiny stdin smoke tool and extend `qemu-smoke-phase6` (`done`: `/bin/readln.elf`)
+- [x] Keep `make check` green after the transition (`done`)
 
 ## Risks
-- Risk: shell work introduces broad churn across userland, syscall wrappers, and boot/demo flow.
-  - Mitigation: keep the first shell narrow and stage under a dedicated smoke target.
-- Risk: ad hoc per-program assembly grows into another bootstrap dead end.
-  - Mitigation: require one shared wrapper/runtime layer before adding more user tools.
+- Risk: console reads are still non-blocking, so simple foreground readers can spin hard while waiting for input.
+  - Mitigation: the immediate stopgap is now one-tick sleep-based polling in the shell and `readln`; revisit true blocking reads next.
+- Risk: userland ergonomics work can easily sprawl into a much larger shell feature push.
+  - Mitigation: keep whitespace-only parsing and synchronous foreground execution explicitly out of scope.
 
 ## Exit criteria
-- [x] System reaches a repeatable boot-to-shell (or boot-to-init-to-shell) flow
-- [x] First user-facing tools run from `/bin` without bespoke demo-only kernel hooks
-- [x] Process launch uses the Phase 5 spawn/wait path end-to-end
-- [x] Shell/runtime limitations are explicitly documented for the next milestone handoff
+- [x] One foreground child can read from `/dev/console` and return control to the shell cleanly
+- [x] Console ownership returns to `user-shell` after the child exits
+- [x] `echo` preserves multi-word arguments through the new `argc/argv` startup path
+- [x] `ps` shows a deterministic-enough task snapshot for smoke coverage
+- [x] `make qemu-smoke-phase6` and `make check` pass with the new behavior
 
 ## Notes / decisions
 - 2026-02-27 - Phase 5 completed: wait-driven child synchronization, process-owned FD ownership, and deterministic task-stack/loader-scratch reclamation are in place.
@@ -66,3 +68,14 @@ Turn the stabilized Phase 5 process/runtime base into a usable command workflow:
   - `make qemu-smoke-phase6`
 - 2026-02-27 - Phase 6 completion landed: child launch now inspects ET_EXEC images directly, `uaccess` is task-aware, `/bin/echo.elf` is external, and `make check` now runs the active userfault + Phase 6 smoke path.
 - 2026-02-27 - Remaining Phase 6 limitation: child launch is generic for fixed-address ET_EXEC images, but argument handoff is still flat cmdline-only (no argc/argv), stdin stays with `user-shell`, and `ps` is still a stub.
+- 2026-02-28 - Post-Phase-6 handover is captured in `docs/next_phase_handover.md`; the recommended next slice is foreground stdin handoff, a minimal `argc/argv` ABI, and a real `ps` path before broader device work.
+- 2026-02-28 - Delivered the post-Phase-6 interaction slice: `/dev/console` input ownership is now PID-based, synchronous `waitpid()` temporarily hands stdin to the foreground child, and ownership returns to `user-shell` on completion.
+- 2026-02-28 - Spawned user tools now receive a minimal `argc/argv` startup stack built by the kernel launch path; `/bin/echo.elf` and `/bin/cat.elf` now consume `argc/argv` directly instead of `SYS_GETCMDLINE`.
+- 2026-02-28 - `ps` is now backed by `SYS_TASK_SNAPSHOT`, a bounded kernel task snapshot syscall used by the shell builtin.
+- 2026-02-28 - Added `/bin/readln.elf` as a dedicated stdin handoff smoke tool; `make qemu-smoke-phase6` now checks `readln`, real `ps`, `echo`, `cat`, unknown-command failure, and clean shell exit.
+- 2026-02-28 - Validation for the foreground I/O slice:
+  - `make all`
+  - `make qemu-smoke-phase6`
+  - `make check`
+- 2026-02-28 - Next decision point is no longer shell-process correctness; it is whether to keep polishing the shell/input path (blocking reads, history/editing, maybe `sleep`) or move to broader device/reliability work.
+- 2026-02-28 - Began the first post-milestone shell-input polish step: added `SYS_SLEEP`, and the shell plus `/bin/readln.elf` now sleep for one tick on empty stdin instead of hot-spinning with pure `yield`.

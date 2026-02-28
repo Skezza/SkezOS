@@ -1,23 +1,33 @@
 # SkezOS Technical Considerations
 
-## Current sequencing note (2026-02-27)
+## Current sequencing note (2026-02-28)
 
-Recommended active milestone after Phase 5 lifecycle hardening:
+The post-Phase-6 interaction milestone is now delivered:
 
-- Phase 6: userland workflow + shell bootstrap
-- focus on shared userspace syscall wrappers, boot-to-shell flow, and first user-facing `/bin` tools
+- `/dev/console` input ownership is PID-based, and the synchronous `waitpid()` path hands stdin to the waited foreground child before restoring it to `user-shell`
+- spawned tools now start with a minimal `argc/argv` frame even though `SYS_SPAWN_EX` still accepts a flat cmdline request shape
+- `SYS_TASK_SNAPSHOT` provides a bounded kernel task snapshot used by the shell `ps` builtin
+- `SYS_SLEEP` is now available as a small userland-facing stopgap, and the shell plus `readln` use it to avoid hot-spinning on empty stdin
+- `make qemu-smoke-phase6` now validates `readln`, real `ps`, external `echo`/`cat`, unknown-command failure handling, and clean shell exit
 
-Rationale: process/FD lifecycle behavior is now deterministic enough that shell and command execution can move forward on a stable base.
+Recommended next decision point:
 
-Phase 5 progress status:
-- process-owned FD table wiring and `waitpid` synchronization are in place
-- transient task-stack and loader-scratch allocations are reclaimed via large-block `kfree`
+- continue userland ergonomics if operator workflow still matters most
+- otherwise move to broader device/reliability work with the shell/process model now in a usable state
 
-Phase 6 bootstrap status:
-- shared assembly syscall/runtime includes now back the current `/bin/hello*.elf` demos
-- `make` rebuilds the initramfs blob from `userland/` sources automatically and now also builds the first mixed C/assembly userland tools
-- the kernel now boots a direct `/bin/sh.elf` fixed-slot shell task, hands `/dev/console` input to the shell, and `make qemu-smoke-phase6` checks real command execution
-- the active remaining bottlenecks are argv/exec generalization and moving beyond the fixed-slot spawn table, not shell input handoff
+If continuing userland polish, the narrow follow-up targets are:
+
+- make console reads block cleanly so foreground readers stop tick-sleep polling altogether
+- add small shell input quality-of-life improvements such as history or line editing
+- add one or two simple utility commands only if they directly help testing/debugging
+
+If switching to lower-level work, the cleanly unblocked candidates are:
+
+- ATA PIO / block-device bring-up
+- clock/timer improvements
+- syscall fuzz hooks or other reliability instrumentation
+
+Historical planning context for the just-completed slice lives in `docs/next_phase_handover.md`.
 
 ## 1) Architecture boundaries
 

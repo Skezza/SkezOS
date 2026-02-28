@@ -33,7 +33,7 @@ struct vfs_node {
 
 typedef enum {
     VFS_CONSOLE_INPUT_OWNER_KERNEL = 0,
-    VFS_CONSOLE_INPUT_OWNER_USER_SHELL = 1,
+    VFS_CONSOLE_INPUT_OWNER_USER_TASK = 1,
 } vfs_console_input_owner_t;
 
 /* VFS bootstrap lifecycle. */
@@ -57,11 +57,14 @@ int vfs_register_root_child(const char *name, struct vfs_node *node);
 int vfs_lookup(const char *path, struct vfs_node **out_node);
 int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file);
 
-/* Phase 6 keeps `/dev/console` input single-owner: the kernel console task
- * starts as the owner, then hands stdin to the bootstrap shell.
+/* `/dev/console` input remains single-owner. Ownership starts in the kernel
+ * console task, then can be handed to one user task at a time.
  */
-void vfs_console_set_input_owner(vfs_console_input_owner_t owner);
+void vfs_console_set_input_owner_kernel(void);
+int vfs_console_set_input_owner_task(int pid);
 vfs_console_input_owner_t vfs_console_get_input_owner(void);
+int vfs_console_get_input_owner_pid(void);
+int vfs_console_input_owner_is_task(int pid);
 int vfs_console_poll_input_char(void);
 
 #endif /* VFS_H */
