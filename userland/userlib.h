@@ -95,8 +95,19 @@ static inline int32_t user_getcmdline(char *buf, uint32_t buf_len) {
     return user_syscall2(SYS_GETCMDLINE, (uint32_t)(uintptr_t)buf, buf_len);
 }
 
+static inline int32_t user_task_snapshot(struct syscall_task_snapshot_entry *entries,
+                                         uint32_t entry_cap) {
+    return user_syscall2(SYS_TASK_SNAPSHOT,
+                         (uint32_t)(uintptr_t)entries,
+                         entry_cap);
+}
+
 static inline void user_yield(void) {
     (void)user_syscall0(SYS_YIELD);
+}
+
+static inline void user_sleep_ticks(uint32_t ticks) {
+    (void)user_syscall1(SYS_SLEEP, ticks);
 }
 
 static inline __attribute__((noreturn)) void user_exit(int32_t code) {

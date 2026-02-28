@@ -40,7 +40,8 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/hello_slot3.o \
 	$(USERLAND_BUILD)/sh_slot4.o \
 	$(USERLAND_BUILD)/cat_slot5.o \
-	$(USERLAND_BUILD)/echo_slot6.o
+	$(USERLAND_BUILD)/echo_slot6.o \
+	$(USERLAND_BUILD)/readln_slot7.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -49,7 +50,8 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello4.elf \
 	$(USERLAND_BUILD)/sh.elf \
 	$(USERLAND_BUILD)/cat.elf \
-	$(USERLAND_BUILD)/echo.elf
+	$(USERLAND_BUILD)/echo.elf \
+	$(USERLAND_BUILD)/readln.elf
 
 .PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-phase5 qemu-smoke-phase6 check
 
@@ -100,6 +102,9 @@ $(USERLAND_BUILD)/cat.elf: $(USERLAND_BUILD)/cat_slot5.o
 $(USERLAND_BUILD)/echo.elf: $(USERLAND_BUILD)/echo_slot6.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01478000 -o $@ $<
 
+$(USERLAND_BUILD)/readln.elf: $(USERLAND_BUILD)/readln_slot7.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01489000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -110,6 +115,7 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/sh.elf $(INITRAMFS_STAGING)/bin/sh.elf
 	cp $(USERLAND_BUILD)/cat.elf $(INITRAMFS_STAGING)/bin/cat.elf
 	cp $(USERLAND_BUILD)/echo.elf $(INITRAMFS_STAGING)/bin/echo.elf
+	cp $(USERLAND_BUILD)/readln.elf $(INITRAMFS_STAGING)/bin/readln.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -311,15 +317,21 @@ qemu-smoke-phase6:
 	@rm -f $(BUILD)/qemu-smoke-phase6.log
 	@echo "[qemu-smoke-phase6] Booting headless VM with scripted shell input..."
 	@rc=0; \
-	{ sleep 2; \
+	{ sleep 4; \
 		printf 'help\n'; \
-		sleep 1; \
+		sleep 0.25; \
+		printf 'readln\n'; \
+		sleep 0.25; \
+		printf 'stdin handoff works\n'; \
+		sleep 0.25; \
+		printf 'ps\n'; \
+		sleep 0.25; \
 		printf 'echo phase6 interactive echo\n'; \
-		sleep 1; \
+		sleep 0.25; \
 		printf 'cat readme.txt\n'; \
-		sleep 1; \
+		sleep 0.25; \
 		printf 'missing\n'; \
-		sleep 1; \
+		sleep 0.25; \
 		printf 'exit\n'; \
 	} | \
 	timeout -s INT -k 2s $(SMOKE_TIMEOUT_SECS)s $(QEMU) \
@@ -348,13 +360,23 @@ qemu-smoke-phase6:
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fo 'sh> ' $(BUILD)/qemu-smoke-phase6.log | wc -l)" -lt 5 ]; then \
+	@if [ "$$(grep -Fo 'sh> ' $(BUILD)/qemu-smoke-phase6.log | wc -l)" -lt 7 ]; then \
 		echo "[qemu-smoke-phase6] Missing repeated shell prompts"; \
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi
 	@if ! grep -Fq "sh: builtins help wait ps exit; external names map to /bin/<name>.elf" $(BUILD)/qemu-smoke-phase6.log; then \
 		echo "[qemu-smoke-phase6] Missing shell help output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "readln: stdin handoff works" $(BUILD)/qemu-smoke-phase6.log; then \
+		echo "[qemu-smoke-phase6] Missing foreground stdin handoff output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "ps: pid=" $(BUILD)/qemu-smoke-phase6.log; then \
+		echo "[qemu-smoke-phase6] Missing ps task snapshot output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi

@@ -4,16 +4,18 @@
 
 #define SHELL_LINE_MAX 128U
 #define SHELL_PATH_MAX 96U
+#define SHELL_PS_MAX_TASKS 16U
 
 static char g_shell_line[SHELL_LINE_MAX];
 static char g_shell_path[SHELL_PATH_MAX];
+static struct syscall_task_snapshot_entry g_shell_ps_tasks[SHELL_PS_MAX_TASKS];
 
 static const char kBanner[] = "sh: bootstrap shell online\n";
 static const char kPrompt[] = "sh> ";
 static const char kHelp[] =
     "sh: builtins help wait ps exit; external names map to /bin/<name>.elf\n";
 static const char kWaitStub[] = "sh: no background jobs in bootstrap shell\n";
-static const char kPsStub[] = "sh: ps unavailable in bootstrap shell\n";
+static const char kPsFail[] = "sh: ps failed\n";
 static const char kSpawnFail[] = "sh: command failed\n";
 static const char kWaitFail[] = "sh: waitpid failed\n";
 static const char kExit[] = "sh: bootstrap shell exit\n";
@@ -34,6 +36,102 @@ static void shell_write_str(const char *s) {
     shell_write_all(s, user_strlen(s));
 }
 
+static void shell_write_char(char ch) {
+    shell_write_all(&ch, 1U);
+}
+
+static void shell_write_u32(uint32_t value) {
+    char buf[10];
+    uint32_t len = 0;
+
+    if (value == 0U) {
+        shell_write_char('0');
+        return;
+    }
+
+    while (value != 0U && len < sizeof(buf)) {
+        buf[len++] = (char)('0' + (value % 10U));
+        value /= 10U;
+    }
+    while (len > 0U) {
+        shell_write_char(buf[--len]);
+    }
+}
+
+static void shell_write_i32(int32_t value) {
+    uint32_t magnitude;
+
+    if (value < 0) {
+        shell_write_char('-');
+        magnitude = (uint32_t)(-(value + 1)) + 1U;
+    } else {
+        magnitude = (uint32_t)value;
+    }
+    shell_write_u32(magnitude);
+}
+
+static void shell_write_task_state(uint32_t state) {
+    switch (state) {
+        case SYSCALL_TASK_STATE_RUNNABLE:
+            shell_write_str("runnable");
+            return;
+        case SYSCALL_TASK_STATE_RUNNING:
+            shell_write_str("running");
+            return;
+        case SYSCALL_TASK_STATE_SLEEPING:
+            shell_write_str("sleep");
+            return;
+        case SYSCALL_TASK_STATE_WAIT_CHILD:
+            shell_write_str("wait-child");
+            return;
+        case SYSCALL_TASK_STATE_ZOMBIE:
+            shell_write_str("zombie");
+            return;
+        default:
+            shell_write_str("unknown");
+            return;
+    }
+}
+
+static void shell_run_ps(void) {
+    int32_t count = user_task_snapshot(g_shell_ps_tasks, SHELL_PS_MAX_TASKS);
+
+    if (count < 0) {
+        shell_write_str(kPsFail);
+        return;
+    }
+
+    for (uint32_t i = 0; i < (uint32_t)count; i++) {
+        const struct syscall_task_snapshot_entry *entry = &g_shell_ps_tasks[i];
+
+        shell_write_str("ps: pid=");
+        shell_write_i32(entry->pid);
+        shell_write_str(" ppid=");
+        shell_write_i32(entry->parent_pid);
+        shell_write_str(" state=");
+        shell_write_task_state(entry->state);
+        shell_write_str(" mode=");
+        if ((entry->flags & SYSCALL_TASK_FLAG_USER) != 0U) {
+            shell_write_str("user");
+        } else {
+            shell_write_str("kernel");
+        }
+        shell_write_str(" exit=");
+        if ((entry->flags & SYSCALL_TASK_FLAG_EXIT_VALID) != 0U) {
+            shell_write_i32(entry->exit_code);
+        } else {
+            shell_write_char('-');
+        }
+        shell_write_str(" name=");
+        if (entry->name[0] != '\0') {
+            shell_write_str(entry->name);
+        } else {
+            shell_write_char('?');
+        }
+        shell_write_str(kNewline);
+    }
+}
+
 static int32_t shell_read_char_blocking(void) {
     char ch;
 
@@ -45,7 +143,7 @@ static int32_t shell_read_char_blocking(void) {
         if (rc < 0) {
             return rc;
         }
-        user_yield();
+        user_sleep_ticks(1U);
     }
 }
 
@@ -180,7 +278,7 @@ static int shell_dispatch_line(const char *line) {
         return 1;
     }
     if (user_str_eq_n(line + cmd_start, "ps", cmd_end - cmd_start)) {
-        shell_write_str(kPsStub);
+        shell_run_ps();
         return 1;
     }
     if (user_str_eq_n(line + cmd_start, "exit", cmd_end - cmd_start)) {

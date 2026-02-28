@@ -18,6 +18,7 @@ extern void syscall_entry_stub(void);
 #define SYSCALL_SPAWN_PATH_MAX 64U
 #define SYSCALL_CMDLINE_MAX    128U
 #define SYSCALL_OPEN_PATH_MAX  64U
+#define SYSCALL_TASK_SNAPSHOT_MAX 16U
 
 static int syscall_stdio_kfile_for_fd(uint32_t fd, int for_write, struct kfile **out_file);
 
@@ -285,8 +286,10 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     int target_pid = (int)regs->ebx;
     uint32_t status_ptr = regs->ecx;
     uint32_t options = regs->edx;
+    int parent_pid;
     int waited_pid;
     int32_t waited_exit = 0;
+    int handed_off_stdin = 0;
     int rc;
 
     if (!sched_current_task_is_user()) {
@@ -300,7 +303,20 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
         return syscall_ret_err(KERR_FAULT);
     }
 
+    parent_pid = sched_current_task_pid();
+    if (target_pid > 0 &&
+        parent_pid > 0 &&
+        vfs_console_input_owner_is_task(parent_pid) &&
+        sched_current_task_owns_child_pid(target_pid)) {
+        if (vfs_console_set_input_owner_task(target_pid) == 0) {
+            handed_off_stdin = 1;
+        }
+    }
+
     rc = sched_waitpid(target_pid, &waited_pid, &waited_exit);
+    if (handed_off_stdin) {
+        (void)vfs_console_set_input_owner_task(parent_pid);
+    }
     if (rc < 0) {
         return syscall_ret_err(-rc);
     }
@@ -318,6 +334,44 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
           waited_pid,
           waited_exit);
     return (uint32_t)waited_pid;
+}
+
+static uint32_t sys_task_snapshot(struct syscall_saved_regs *regs) {
+    uint32_t entries_ptr = regs->ebx;
+    uint32_t entry_cap = regs->ecx;
+    struct syscall_task_snapshot_entry snapshot[SYSCALL_TASK_SNAPSHOT_MAX];
+    uint32_t capped_cap = entry_cap;
+    uint32_t count = 0;
+    uint32_t copy_bytes = 0;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    if (capped_cap > SYSCALL_TASK_SNAPSHOT_MAX) {
+        capped_cap = SYSCALL_TASK_SNAPSHOT_MAX;
+    }
+    if (capped_cap != 0U) {
+        copy_bytes = capped_cap * (uint32_t)sizeof(snapshot[0]);
+        if (entries_ptr == 0U || !uaccess_user_range_ok(entries_ptr, copy_bytes)) {
+            return syscall_ret_err(KERR_FAULT);
+        }
+    }
+
+    rc = sched_collect_task_snapshot(snapshot, capped_cap, &count);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    if (count != 0U) {
+        copy_bytes = count * (uint32_t)sizeof(snapshot[0]);
+        rc = uaccess_copy_to_user(entries_ptr, snapshot, copy_bytes);
+        if (rc < 0) {
+            return syscall_ret_err(-rc);
+        }
+    }
+
+    return count;
 }
 
 static uint32_t sys_getcmdline(struct syscall_saved_regs *regs) {
@@ -339,6 +393,15 @@ static uint32_t sys_getcmdline(struct syscall_saved_regs *regs) {
 
 static uint32_t sys_yield(void) {
     sched_yield();
+    return 0;
+}
+
+static uint32_t sys_sleep(struct syscall_saved_regs *regs) {
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    sched_sleep_ticks(regs->ebx);
     return 0;
 }
 
@@ -390,6 +453,10 @@ uint32_t syscall_dispatch(struct syscall_saved_regs *regs) {
             return sys_close(regs);
         case SYS_WAITPID:
             return sys_waitpid(regs);
+        case SYS_TASK_SNAPSHOT:
+            return sys_task_snapshot(regs);
+        case SYS_SLEEP:
+            return sys_sleep(regs);
         case SYS_GETCMDLINE:
             return sys_getcmdline(regs);
         default:

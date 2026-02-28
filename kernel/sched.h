@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 struct kfile;
+struct syscall_task_snapshot_entry;
 
 typedef void (*sched_task_entry_t)(void *arg);
 
@@ -37,6 +38,10 @@ void sched_note_current_exit_code(int32_t exit_code);
 int sched_current_task_is_user(void);
 int sched_current_task_pid(void);
 const char *sched_current_task_name(void);
+int sched_current_task_owns_child_pid(int pid);
+int sched_collect_task_snapshot(struct syscall_task_snapshot_entry *entries,
+                                uint32_t cap,
+                                uint32_t *out_count);
 
 /* Process-owned FD table helpers used by syscall I/O path. */
 int sched_current_process_fd_get(uint32_t fd, struct kfile **out_file);

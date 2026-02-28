@@ -9,6 +9,7 @@
 #include "klog.h"
 #include "kmalloc.h"
 #include "proc_fd.h"
+#include "syscall_abi.h"
 #include "timer.h"
 #include "usermode.h"
 #include "utils.h"
@@ -119,6 +120,7 @@ static int sched_ranges_overlap(uint32_t base_a,
                                 uint32_t size_a,
                                 uint32_t base_b,
                                 uint32_t size_b);
+static uint32_t sched_state_to_syscall_state(task_state_t state);
 
 static void sched_panic_unexpected_return(void) {
     KLOGP("scheduler returned to unexpected context");
@@ -312,6 +314,18 @@ static const char *sched_state_name(task_state_t state) {
         case TASK_WAIT_CHILD:return "wait-child";
         case TASK_ZOMBIE:    return "zombie";
         default:             return "unknown";
+    }
+}
+
+static uint32_t sched_state_to_syscall_state(task_state_t state) {
+    switch (state) {
+        case TASK_UNUSED:     return SYSCALL_TASK_STATE_UNUSED;
+        case TASK_RUNNABLE:   return SYSCALL_TASK_STATE_RUNNABLE;
+        case TASK_RUNNING:    return SYSCALL_TASK_STATE_RUNNING;
+        case TASK_SLEEPING:   return SYSCALL_TASK_STATE_SLEEPING;
+        case TASK_WAIT_CHILD: return SYSCALL_TASK_STATE_WAIT_CHILD;
+        case TASK_ZOMBIE:     return SYSCALL_TASK_STATE_ZOMBIE;
+        default:              return SYSCALL_TASK_STATE_UNUSED;
     }
 }
 
@@ -749,6 +763,69 @@ const char *sched_current_task_name(void) {
         return "none";
     }
     return g_current_task->name;
+}
+
+int sched_current_task_owns_child_pid(int pid) {
+    int owns = 0;
+    struct task *child;
+
+    if (pid <= 0 || !g_current_task || !sched_current_task_is_user()) {
+        return 0;
+    }
+
+    sched_cli();
+    child = sched_find_task_by_pid_locked(pid);
+    if (child && child->parent_pid == g_current_task->pid) {
+        owns = 1;
+    }
+    sched_sti();
+    return owns;
+}
+
+int sched_collect_task_snapshot(struct syscall_task_snapshot_entry *entries,
+                                uint32_t cap,
+                                uint32_t *out_count) {
+    uint32_t count = 0;
+
+    if (!out_count) {
+        return -KERR_INVAL;
+    }
+    *out_count = 0U;
+    if (cap != 0U && !entries) {
+        return -KERR_INVAL;
+    }
+
+    sched_cli();
+    for (uint32_t i = 0; i < SCHED_MAX_TASKS; i++) {
+        const struct task *task = &g_tasks[i];
+        struct syscall_task_snapshot_entry *entry;
+
+        if (task->state == TASK_UNUSED) {
+            continue;
+        }
+        if (count >= cap) {
+            break;
+        }
+
+        entry = &entries[count];
+        memset(entry, 0, sizeof(*entry));
+        entry->pid = task->pid;
+        entry->parent_pid = task->parent_pid;
+        entry->exit_code = task->user.exit_code_valid ? task->user.exit_code : 0;
+        entry->state = sched_state_to_syscall_state(task->state);
+        if (task->exec_mode == TASK_EXEC_USER_BOOTSTRAP) {
+            entry->flags |= SYSCALL_TASK_FLAG_USER;
+        }
+        if (task->user.exit_code_valid) {
+            entry->flags |= SYSCALL_TASK_FLAG_EXIT_VALID;
+        }
+        sched_copy_task_name(entry->name, task->name);
+        count++;
+    }
+    sched_sti();
+
+    *out_count = count;
+    return 0;
 }
 
 int sched_current_process_fd_get(uint32_t fd, struct kfile **out_file) {

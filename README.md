@@ -12,7 +12,7 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 - **Quick validation**: `make check` (toolchain check + clean build + userfault recovery + Phase 6 shell smoke)
 - **User fault smoke**: `make qemu-smoke-userfault` (asserts user-page-fault recovery and continued scheduling)
 - **Phase 5 smoke**: `make qemu-smoke-phase5` (asserts wait-driven spawn/reap plus FD open/read/close flow)
-- **Phase 6 smoke**: `make qemu-smoke-phase6` (asserts interactive `/bin/sh.elf` command dispatch, external `echo`/`cat`, unknown-command failure handling, and `waitpid` completion)
+- **Phase 6 smoke**: `make qemu-smoke-phase6` (asserts interactive `/bin/sh.elf` command dispatch, foreground stdin handoff via `readln`, real `ps`, external `echo`/`cat`, unknown-command failure handling, and `waitpid` completion)
 - **Run**: `make run` or `qemu-system-i386 -cdrom skezos.iso` if you want to keep control of the command line.
 - **What’s inside**: serial console, keyboard, VGA output, interrupts/IDT setup, paging, physical allocator, `kmalloc`, panic logging, and the obligatory page fault to show the fault handler works.
 - **Layout**: `boot/` holds the Multiboot header/loader, `kernel/` contains the sources, `iso/boot/grub/grub.cfg` houses the menu entry, and `Makefile` ties it all together into `skezos.iso`.
@@ -24,14 +24,14 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 3. `make check` to run the default validation chain (toolchain check, clean rebuild, `qemu-smoke-userfault`, then `qemu-smoke-phase6`).
 4. `make qemu-smoke-userfault` to validate the Phase 3 user-fault recovery path.
 5. `make qemu-smoke-phase5` to validate Phase 5 lifecycle + FD ownership behavior.
-6. `make qemu-smoke-phase6` to validate the interactive bootstrap shell flow (`help`, external `echo`, external `cat`, unknown-command failure, `exit`).
+6. `make qemu-smoke-phase6` to validate the interactive bootstrap shell flow (`help`, `readln`, `ps`, external `echo`, external `cat`, unknown-command failure, `exit`).
 7. `make run` or `qemu-system-i386 -cdrom skezos.iso` to boot it interactively.
 
 <img width="1124" height="858" alt="Screenshot from 2026-02-13 00-15-09" src="https://github.com/user-attachments/assets/a12490a1-f83a-4b03-827b-6973b0909c65" />
 
 ### Keep tinkering
 
-It’s intentionally minimal. The current shell is deliberately bootstrap-grade: whitespace parsing only, foreground-only execution, flat cmdline handoff to external tools, no stdin handoff to children yet, and a stub `ps`. Add a real `argc/argv` startup ABI, a real process listing interface, a better shell, disk drivers, a filesystem, or whatever keeps you wired.
+It’s intentionally minimal. The current shell is still bootstrap-grade: whitespace parsing only, foreground-only execution, real `argc/argv` startup for spawned tools, foreground stdin handoff only for synchronous children, and a bounded kernel-backed `ps` snapshot. It still has no quoting, pipes, redirection, or background jobs. Add a better shell, disk drivers, a filesystem, or whatever keeps you wired.
 
 ### Project docs
 
