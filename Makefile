@@ -343,6 +343,11 @@ qemu-smoke-phase6:
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi
+	@if ! awk 'BEGIN{in_shell=0;bad=0} /sh: bootstrap shell online/{in_shell=1} /sh: bootstrap shell exit/{in_shell=0} in_shell && /sched demo:/{bad=1} END{exit bad ? 1 : 0}' $(BUILD)/qemu-smoke-phase6.log; then \
+		echo "[qemu-smoke-phase6] Unexpected worker demo log spam while shell was active"; \
+		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+		exit 1; \
+	fi
 	@if [ "$$(grep -Fo 'sh> ' $(BUILD)/qemu-smoke-phase6.log | wc -l)" -lt 5 ]; then \
 		echo "[qemu-smoke-phase6] Missing repeated shell prompts"; \
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \

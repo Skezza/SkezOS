@@ -6,6 +6,13 @@
 /* Clear the VGA text buffer and reset the cursor. */
 void vga_clear(void);
 
+/* Enter/leave a short single-core console critical section. The return value
+ * captures the prior interrupt-enabled state and must be passed back to the
+ * matching leave call.
+ */
+uint32_t vga_console_enter_critical(void);
+void vga_console_leave_critical(uint32_t saved_flags);
+
 /* Write a single character to the VGA text buffer at the current
  * cursor position.  Handles newlines by advancing to the next line.
  */

@@ -220,8 +220,10 @@ static int vfs_console_read(struct kfile *file, void *buf, uint32_t len, uint32_
 
 static int vfs_console_write(struct kfile *file, const void *buf, uint32_t len, uint32_t *out_written) {
     const char *s = (const char *)buf;
+    uint32_t saved_flags;
     (void)file;
 
+    saved_flags = vga_console_enter_critical();
     for (uint32_t i = 0; i < len; i++) {
         char c = s[i];
         if (c == '\n') {
@@ -233,6 +235,7 @@ static int vfs_console_write(struct kfile *file, const void *buf, uint32_t len, 
     if (out_written) {
         *out_written = len;
     }
+    vga_console_leave_critical(saved_flags);
     return 0;
 }
 

@@ -8,6 +8,7 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 
 - **Build**: `make` (you need `gcc`/`as`/`ld` with `-m32` support, plus `grub-mkrescue`, `xorriso`, `qemu-system-i386`, `tar`, and `od`).
 - **Userland packaging**: `make` now builds mixed `userland/` assembly/C programs into `/bin/*.elf` and regenerates the built-in initramfs blob automatically.
+- **Console behavior**: VGA now scrolls instead of wrapping back to the top, and background worker demo logs stay quiet once the shell owns the console.
 - **Quick validation**: `make check` (toolchain check + clean build + userfault recovery + Phase 6 shell smoke)
 - **User fault smoke**: `make qemu-smoke-userfault` (asserts user-page-fault recovery and continued scheduling)
 - **Phase 5 smoke**: `make qemu-smoke-phase5` (asserts wait-driven spawn/reap plus FD open/read/close flow)

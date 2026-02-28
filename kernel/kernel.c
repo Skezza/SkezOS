@@ -107,14 +107,18 @@ static void boot_self_checks_post_paging(void) {
 }
 
 static void handle_input_char(char c) {
+    uint32_t saved_flags;
+
     if (c == 0x16) {
         bool verbose = !keyboard_is_verbose();
         keyboard_set_verbose(verbose);
         serial_writestr(verbose ? "\nVerbose keyboard logging enabled\n" : "\nVerbose keyboard logging disabled\n");
         return;
     }
+    saved_flags = vga_console_enter_critical();
     vga_putc(c);
     serial_writechar(c);
+    vga_console_leave_critical(saved_flags);
 }
 
 static void console_task(void *arg) {
@@ -144,7 +148,8 @@ static void demo_worker_task(void *arg) {
     uint32_t iter = 0;
     for (;;) {
         iter++;
-        if ((iter % 8U) == 1U) {
+        if (vfs_console_get_input_owner() == VFS_CONSOLE_INPUT_OWNER_KERNEL &&
+            (iter % 8U) == 1U) {
             KLOGI("sched demo: %s iter=%u tick=%u",
                   cfg->name, iter, (uint32_t)timer_ticks);
         }

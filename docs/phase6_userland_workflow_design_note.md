@@ -32,6 +32,7 @@ The interactive Phase 6 bootstrap slice is now in place:
 - `SYS_SPAWN_EX` and `SYS_GETCMDLINE` now provide a narrow flat-cmdline handoff, so `/bin/echo.elf` and `/bin/cat.elf` run as real external tools
 - child launch now inspects fixed-address ET_EXEC images directly instead of relying on a per-path kernel whitelist, while boot shell startup remains fixed-slot
 - `make qemu-smoke-phase6` now drives the shell through serial input, asserts external `echo`/`cat`, and checks unknown-command failure handling
+- VGA text output now scrolls instead of wrapping over the boot banner, and background worker demo logs stay quiet after the shell takes console ownership
 
 This closes the console handoff blocker and proves the first end-to-end userland workflow. The phase still intentionally keeps the runtime narrow: there is no argv support, no relocatable/dynamic loader, and stdin remains pinned to the shell rather than the foreground child.
 
