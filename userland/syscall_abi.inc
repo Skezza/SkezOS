@@ -9,6 +9,8 @@
 	.set SYS_OPEN, 7
 	.set SYS_CLOSE, 8
 	.set SYS_WAITPID, 9
+	.set SYS_SPAWN_EX, 10
+	.set SYS_GETCMDLINE, 11
 
 	.set SYSCALL_FD_STDIN, 0
 	.set SYSCALL_FD_STDOUT, 1

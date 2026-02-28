@@ -16,6 +16,7 @@
 extern void syscall_entry_stub(void);
 
 #define SYSCALL_SPAWN_PATH_MAX 64U
+#define SYSCALL_CMDLINE_MAX    128U
 #define SYSCALL_OPEN_PATH_MAX  64U
 
 static int syscall_stdio_kfile_for_fd(uint32_t fd, int for_write, struct kfile **out_file);
@@ -177,6 +178,53 @@ static uint32_t sys_spawn(struct syscall_saved_regs *regs) {
     return (uint32_t)rc;
 }
 
+static uint32_t sys_spawn_ex(struct syscall_saved_regs *regs) {
+    uint32_t req_ptr = regs->ebx;
+    struct syscall_spawn_ex_req req;
+    char path[SYSCALL_SPAWN_PATH_MAX];
+    char cmdline[SYSCALL_CMDLINE_MAX];
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = uaccess_copy_from_user(&req, req_ptr, (uint32_t)sizeof(req));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    if (req.path_len == 0U || req.path_len >= SYSCALL_SPAWN_PATH_MAX) {
+        return syscall_ret_err(KERR_INVAL);
+    }
+    if (req.cmdline_len >= SYSCALL_CMDLINE_MAX) {
+        return syscall_ret_err(KERR_INVAL);
+    }
+    if (req.cmdline_len != 0U && req.cmdline_ptr == 0U) {
+        return syscall_ret_err(KERR_INVAL);
+    }
+
+    rc = uaccess_copy_from_user(path, req.path_ptr, req.path_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    path[req.path_len] = '\0';
+
+    cmdline[0] = '\0';
+    if (req.cmdline_len != 0U) {
+        rc = uaccess_copy_from_user(cmdline, req.cmdline_ptr, req.cmdline_len);
+        if (rc < 0) {
+            return syscall_ret_err(-rc);
+        }
+    }
+    cmdline[req.cmdline_len] = '\0';
+
+    rc = usermode_spawn_path_task_ex(path, cmdline, req.cmdline_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return (uint32_t)rc;
+}
+
 static uint32_t sys_open(struct syscall_saved_regs *regs) {
     uint32_t path_ptr = regs->ebx;
     uint32_t path_len = regs->ecx;
@@ -272,6 +320,23 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     return (uint32_t)waited_pid;
 }
 
+static uint32_t sys_getcmdline(struct syscall_saved_regs *regs) {
+    uint32_t dst_ptr = regs->ebx;
+    uint32_t dst_len = regs->ecx;
+    uint32_t copied_len = 0;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = sched_copy_current_task_cmdline_to_user(dst_ptr, dst_len, &copied_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return copied_len;
+}
+
 static uint32_t sys_yield(void) {
     sched_yield();
     return 0;
@@ -317,12 +382,16 @@ uint32_t syscall_dispatch(struct syscall_saved_regs *regs) {
             return sys_read(regs);
         case SYS_SPAWN:
             return sys_spawn(regs);
+        case SYS_SPAWN_EX:
+            return sys_spawn_ex(regs);
         case SYS_OPEN:
             return sys_open(regs);
         case SYS_CLOSE:
             return sys_close(regs);
         case SYS_WAITPID:
             return sys_waitpid(regs);
+        case SYS_GETCMDLINE:
+            return sys_getcmdline(regs);
         default:
             KLOGW("syscall: unknown nr=%u ebx=%x ecx=%x edx=%x",
                   regs->eax, regs->ebx, regs->ecx, regs->edx);

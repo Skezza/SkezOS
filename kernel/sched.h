@@ -19,6 +19,14 @@ int sched_spawn_kernel_task(const char *name, sched_task_entry_t entry, void *ar
  * will drop to Ring 3 at USER_EIP/USER_ESP.
  */
 int sched_mark_current_task_user_bootstrap(uint32_t user_eip, uint32_t user_esp);
+int sched_set_current_user_layout(uint32_t image_base,
+                                  uint32_t image_size,
+                                  uint32_t stack_base,
+                                  uint32_t stack_size);
+int sched_current_user_range_ok(uint32_t addr, uint32_t len);
+int sched_set_current_task_cmdline(const char *src, uint32_t len);
+int sched_copy_current_task_cmdline_to_user(uint32_t dst_addr, uint32_t dst_len, uint32_t *out_len);
+int sched_user_image_range_available(uint32_t image_base, uint32_t image_size);
 
 /* User-task diagnostics hooks used by the Phase 3 syscall/fault path. */
 void sched_note_current_syscall(uint32_t syscall_nr);

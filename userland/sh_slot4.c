@@ -11,7 +11,7 @@ static char g_shell_path[SHELL_PATH_MAX];
 static const char kBanner[] = "sh: bootstrap shell online\n";
 static const char kPrompt[] = "sh> ";
 static const char kHelp[] =
-    "sh: builtins help echo wait ps exit; external names map to /bin/<name>.elf\n";
+    "sh: builtins help wait ps exit; external names map to /bin/<name>.elf\n";
 static const char kWaitStub[] = "sh: no background jobs in bootstrap shell\n";
 static const char kPsStub[] = "sh: ps unavailable in bootstrap shell\n";
 static const char kSpawnFail[] = "sh: command failed\n";
@@ -131,7 +131,10 @@ static int shell_build_spawn_path(const char *cmd, uint32_t cmd_len, char *out, 
     return (int)total;
 }
 
-static void shell_run_external(const char *cmd, uint32_t cmd_len) {
+static void shell_run_external(const char *cmd,
+                               uint32_t cmd_len,
+                               const char *cmdline,
+                               uint32_t cmdline_len) {
     int path_len;
     int32_t child_pid;
     int32_t wait_status = 0;
@@ -142,7 +145,10 @@ static void shell_run_external(const char *cmd, uint32_t cmd_len) {
         return;
     }
 
-    child_pid = user_spawn(g_shell_path, (uint32_t)path_len);
+    child_pid = user_spawn_ex(g_shell_path,
+                              (uint32_t)path_len,
+                              cmdline,
+                              cmdline_len);
     if (child_pid < 0) {
         shell_write_str(kSpawnFail);
         return;
@@ -177,17 +183,15 @@ static int shell_dispatch_line(const char *line) {
         shell_write_str(kPsStub);
         return 1;
     }
-    if (user_str_eq_n(line + cmd_start, "echo", cmd_end - cmd_start)) {
-        shell_write_str(line + arg_start);
-        shell_write_str(kNewline);
-        return 1;
-    }
     if (user_str_eq_n(line + cmd_start, "exit", cmd_end - cmd_start)) {
         shell_write_str(kExit);
         return 0;
     }
 
-    shell_run_external(line + cmd_start, cmd_end - cmd_start);
+    shell_run_external(line + cmd_start,
+                       cmd_end - cmd_start,
+                       line + arg_start,
+                       user_strlen(line + arg_start));
     return 1;
 }
 

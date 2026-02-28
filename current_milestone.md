@@ -30,7 +30,7 @@ Turn the stabilized Phase 5 process/runtime base into a usable command workflow:
 - [x] Define a minimal common userspace startup/runtime convention (`done`, assembly-first via shared include macros)
 - [x] Decide bootstrap entry (`/bin/sh.elf` direct) and wire kernel launch path (`done`)
 - [x] Implement first shell command loop (`done`: console handoff + prompt/read/dispatch loop + foreground wait path)
-- [x] Add first user-facing `/bin` tools using shared wrappers (`done`: fixed-slot `/bin/cat.elf`; `echo` is currently a shell builtin because spawn still has no argv)
+- [x] Add first user-facing `/bin` tools using shared wrappers (`done`: external `/bin/cat.elf` + `/bin/echo.elf` now consume a flat inherited cmdline)
 - [x] Add preliminary `qemu-smoke-phase6` target (boot -> shell banner/prompt) (`done`)
 - [x] Extend `qemu-smoke-phase6` to assert shell-driven command execution (`done`)
 
@@ -42,7 +42,7 @@ Turn the stabilized Phase 5 process/runtime base into a usable command workflow:
 
 ## Exit criteria
 - [x] System reaches a repeatable boot-to-shell (or boot-to-init-to-shell) flow
-- [ ] First user-facing tools run from `/bin` without bespoke demo-only kernel hooks
+- [x] First user-facing tools run from `/bin` without bespoke demo-only kernel hooks
 - [x] Process launch uses the Phase 5 spawn/wait path end-to-end
 - [x] Shell/runtime limitations are explicitly documented for the next milestone handoff
 
@@ -59,9 +59,10 @@ Turn the stabilized Phase 5 process/runtime base into a usable command workflow:
   - `make qemu-smoke-phase5`
   - `make qemu-smoke-userfault`
 - 2026-02-27 - Chose direct `/bin/sh.elf` bootstrap. The kernel now starts a fixed-slot shell task at boot, and `make qemu-smoke-phase6` asserts the shell banner/prompt path.
-- 2026-02-27 - Phase 6 shell bootstrap is now interactive: `/dev/console` input hands off to `user-shell`, the shell runs a prompt/read/dispatch loop, `echo` works as a builtin, and fixed-slot `/bin/cat.elf` runs through `spawn` + `waitpid`.
+- 2026-02-27 - Phase 6 shell bootstrap is now interactive: `/dev/console` input hands off to `user-shell`, the shell runs a prompt/read/dispatch loop, external `/bin/echo.elf` and `/bin/cat.elf` run through `spawn` + `waitpid`, and `SYS_SPAWN_EX` hands children a flat inherited cmdline.
 - 2026-02-27 - Validation for the interactive Phase 6 slice:
   - `make qemu-smoke-phase5`
   - `make qemu-smoke-userfault`
   - `make qemu-smoke-phase6`
-- 2026-02-27 - Remaining Phase 6 limitation: runtime `SYS_SPAWN` is still fixed-slot and path-only, so `echo` remains builtin and external tools still require explicit slot wiring.
+- 2026-02-27 - Phase 6 completion landed: child launch now inspects ET_EXEC images directly, `uaccess` is task-aware, `/bin/echo.elf` is external, and `make check` now runs the active userfault + Phase 6 smoke path.
+- 2026-02-27 - Remaining Phase 6 limitation: child launch is generic for fixed-address ET_EXEC images, but argument handoff is still flat cmdline-only (no argc/argv), stdin stays with `user-shell`, and `ps` is still a stub.

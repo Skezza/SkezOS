@@ -25,6 +25,7 @@ static int g_user_elf_demo_b_spawned;
 static int g_user_shell_spawned;
 
 #define USERMODE_SPAWN_PATH_MAX 64U
+#define USERMODE_CMDLINE_MAX    128U
 
 struct usermode_elf_demo_cfg {
     const char *path;
@@ -35,15 +36,16 @@ struct usermode_elf_demo_cfg {
     uint32_t stack_size;
 };
 
-struct usermode_spawn_req {
-    const char *allowed_path;
+struct usermode_child_slot {
     char path[USERMODE_SPAWN_PATH_MAX];
+    char cmdline[USERMODE_CMDLINE_MAX];
     const char *tag;
     const char *task_name;
     uint32_t image_base;
     uint32_t image_size;
     uint32_t stack_base;
     uint32_t stack_size;
+    uint32_t cmdline_len;
     int used;
 };
 
@@ -74,50 +76,53 @@ static const struct usermode_elf_demo_cfg g_user_shell_cfg = {
     .stack_size = USER_ELF_SLOT4_STACK_SIZE_BYTES,
 };
 
-static struct usermode_spawn_req g_user_spawn_req_slot2 = {
-    .allowed_path = "/bin/hello3.elf",
+static struct usermode_child_slot g_user_child_slot2 = {
     .path = { 0 },
-    .tag = "elf-spawn-c",
+    .cmdline = { 0 },
+    .tag = "child-slot-a",
     .task_name = "user-spawn-c",
-    .image_base = USER_ELF_SLOT2_IMAGE_BASE,
-    .image_size = USER_ELF_SLOT2_IMAGE_SIZE_BYTES,
+    .image_base = 0U,
+    .image_size = 0U,
     .stack_base = USER_ELF_SLOT2_STACK_BASE,
     .stack_size = USER_ELF_SLOT2_STACK_SIZE_BYTES,
+    .cmdline_len = 0U,
     .used = 0,
 };
 
-static struct usermode_spawn_req g_user_spawn_req_slot3 = {
-    .allowed_path = "/bin/hello4.elf",
+static struct usermode_child_slot g_user_child_slot3 = {
     .path = { 0 },
-    .tag = "elf-spawn-d",
+    .cmdline = { 0 },
+    .tag = "child-slot-b",
     .task_name = "user-spawn-d",
-    .image_base = USER_ELF_SLOT3_IMAGE_BASE,
-    .image_size = USER_ELF_SLOT3_IMAGE_SIZE_BYTES,
+    .image_base = 0U,
+    .image_size = 0U,
     .stack_base = USER_ELF_SLOT3_STACK_BASE,
     .stack_size = USER_ELF_SLOT3_STACK_SIZE_BYTES,
+    .cmdline_len = 0U,
     .used = 0,
 };
 
-static struct usermode_spawn_req g_user_spawn_req_slot5 = {
-    .allowed_path = "/bin/cat.elf",
+static struct usermode_child_slot g_user_child_slot5 = {
     .path = { 0 },
-    .tag = "tool-cat",
+    .cmdline = { 0 },
+    .tag = "child-slot-c",
     .task_name = "user-cat",
-    .image_base = USER_ELF_SLOT5_IMAGE_BASE,
-    .image_size = USER_ELF_SLOT5_IMAGE_SIZE_BYTES,
+    .image_base = 0U,
+    .image_size = 0U,
     .stack_base = USER_ELF_SLOT5_STACK_BASE,
     .stack_size = USER_ELF_SLOT5_STACK_SIZE_BYTES,
+    .cmdline_len = 0U,
     .used = 0,
 };
 
-static struct usermode_spawn_req *g_user_spawn_reqs[] = {
-    &g_user_spawn_req_slot2,
-    &g_user_spawn_req_slot3,
-    &g_user_spawn_req_slot5,
+static struct usermode_child_slot *g_user_child_slots[] = {
+    &g_user_child_slot2,
+    &g_user_child_slot3,
+    &g_user_child_slot5,
 };
 
-#define USERMODE_SPAWN_REQ_COUNT \
-    ((uint32_t)(sizeof(g_user_spawn_reqs) / sizeof(g_user_spawn_reqs[0])))
+#define USERMODE_CHILD_SLOT_COUNT \
+    ((uint32_t)(sizeof(g_user_child_slots) / sizeof(g_user_child_slots[0])))
 
 static int usermode_str_eq(const char *a, const char *b) {
     uint32_t i = 0;
@@ -151,21 +156,28 @@ static int usermode_copy_cstr(char *dst, uint32_t dst_cap, const char *src) {
     return -KERR_INVAL;
 }
 
-static struct usermode_spawn_req *usermode_spawn_req_by_path(const char *path) {
-    for (uint32_t i = 0; i < USERMODE_SPAWN_REQ_COUNT; i++) {
-        struct usermode_spawn_req *req = g_user_spawn_reqs[i];
-        if (req && req->allowed_path && usermode_str_eq(path, req->allowed_path)) {
-            return req;
+static struct usermode_child_slot *usermode_child_slot_acquire(uint32_t image_base, uint32_t image_size) {
+    for (uint32_t i = 0; i < USERMODE_CHILD_SLOT_COUNT; i++) {
+        struct usermode_child_slot *slot = g_user_child_slots[i];
+        if (!slot || slot->used) {
+            continue;
+        }
+        if ((image_base < (slot->stack_base + slot->stack_size)) &&
+            (slot->stack_base < (image_base + image_size))) {
+            continue;
+        }
+        if (slot) {
+            return slot;
         }
     }
     return 0;
 }
 
-static struct usermode_spawn_req *usermode_spawn_req_by_task_name(const char *task_name) {
-    for (uint32_t i = 0; i < USERMODE_SPAWN_REQ_COUNT; i++) {
-        struct usermode_spawn_req *req = g_user_spawn_reqs[i];
-        if (req && req->task_name && usermode_str_eq(task_name, req->task_name)) {
-            return req;
+static struct usermode_child_slot *usermode_child_slot_by_task_name(const char *task_name) {
+    for (uint32_t i = 0; i < USERMODE_CHILD_SLOT_COUNT; i++) {
+        struct usermode_child_slot *slot = g_user_child_slots[i];
+        if (slot && slot->task_name && usermode_str_eq(task_name, slot->task_name)) {
+            return slot;
         }
     }
     return 0;
@@ -239,6 +251,10 @@ static void usermode_fault_prepare_pages(void) {
 static void usermode_demo_task(void *arg) {
     (void)arg;
     usermode_demo_prepare_pages();
+    KASSERT(sched_set_current_user_layout(USER_DEMO_CODE_BASE,
+                                          USER_DEMO_CODE_SIZE_BYTES,
+                                          USER_DEMO_STACK_BASE,
+                                          USER_DEMO_STACK_SIZE_BYTES) == 0);
     KASSERT(sched_mark_current_task_user_bootstrap(USER_DEMO_CODE_BASE, USER_DEMO_STACK_TOP) == 0);
     KLOGI("usermode: entering ring3 demo eip=%x esp=%x",
           USER_DEMO_CODE_BASE, USER_DEMO_STACK_TOP);
@@ -248,6 +264,10 @@ static void usermode_demo_task(void *arg) {
 static void usermode_fault_task(void *arg) {
     (void)arg;
     usermode_fault_prepare_pages();
+    KASSERT(sched_set_current_user_layout(0U,
+                                          0U,
+                                          USER_FAULT_STACK_BASE,
+                                          USER_FAULT_STACK_SIZE_BYTES) == 0);
     KASSERT(sched_mark_current_task_user_bootstrap(USER_FAULT_BAD_EIP, USER_FAULT_STACK_TOP) == 0);
     KLOGI("usermode: entering ring3 fault demo eip=%x esp=%x",
           USER_FAULT_BAD_EIP, USER_FAULT_STACK_TOP);
@@ -275,37 +295,43 @@ static void usermode_elf_demo_task(void *arg) {
         return;
     }
 
+    KASSERT(sched_set_current_user_layout(image.image_base,
+                                          image.image_size,
+                                          cfg->stack_base,
+                                          cfg->stack_size) == 0);
     KASSERT(sched_mark_current_task_user_bootstrap(image.entry_eip, image.stack_top) == 0);
     KLOGI("usermode: entering ring3 %s path=%s eip=%x esp=%x",
           cfg->tag, cfg->path, image.entry_eip, image.stack_top);
     enter_user_mode(image.entry_eip, image.stack_top);
 }
 
-static void usermode_spawn_req_task(void *arg) {
-    struct usermode_spawn_req *req = (struct usermode_spawn_req *)arg;
+static void usermode_child_slot_task(void *arg) {
+    struct usermode_child_slot *slot = (struct usermode_child_slot *)arg;
     struct elf32_user_image image;
     int rc;
 
-    if (!req) {
-        KLOGW("usermode: null spawn req");
+    if (!slot) {
+        KLOGW("usermode: null child slot");
         return;
     }
 
-    rc = elf32_load_user_static_path(req->path,
-                                     req->image_base,
-                                     req->image_size,
-                                     req->stack_base,
-                                     req->stack_size,
-                                     &image);
+    rc = elf32_load_user_static_path_auto(slot->path,
+                                          slot->stack_base,
+                                          slot->stack_size,
+                                          &image);
     if (rc < 0) {
-        req->used = 0; /* allow retry if load fails before entering user mode */
-        KLOGW("usermode: failed to load %s path=%s rc=%d", req->tag, req->path, rc);
+        KLOGW("usermode: failed to load %s path=%s rc=%d", slot->tag, slot->path, rc);
         return;
     }
 
+    KASSERT(sched_set_current_user_layout(image.image_base,
+                                          image.image_size,
+                                          slot->stack_base,
+                                          slot->stack_size) == 0);
+    KASSERT(sched_set_current_task_cmdline(slot->cmdline, slot->cmdline_len) == 0);
     KASSERT(sched_mark_current_task_user_bootstrap(image.entry_eip, image.stack_top) == 0);
     KLOGI("usermode: entering ring3 %s path=%s eip=%x esp=%x",
-          req->tag, req->path, image.entry_eip, image.stack_top);
+          slot->tag, slot->path, image.entry_eip, image.stack_top);
     enter_user_mode(image.entry_eip, image.stack_top);
 }
 
@@ -379,54 +405,81 @@ int usermode_spawn_shell_task(void) {
 }
 
 int usermode_spawn_path_task(const char *path) {
-    struct usermode_spawn_req *req;
+    return usermode_spawn_path_task_ex(path, 0, 0U);
+}
+
+int usermode_spawn_path_task_ex(const char *path, const char *cmdline, uint32_t cmdline_len) {
+    struct elf32_user_layout layout;
+    struct usermode_child_slot *slot;
     int child_pid;
     int rc;
 
     if (!path || path[0] != '/') {
         return -KERR_INVAL;
     }
-
-    /* Bootstrap constraint: ET_EXEC binaries are linked for fixed
-     * addresses. Runtime spawn supports a tiny fixed slot table keyed
-     * by known /bin ELF demo paths.
-     */
-    req = usermode_spawn_req_by_path(path);
-    if (!req) {
-        return -KERR_NOTSUP;
+    if (!cmdline && cmdline_len != 0U) {
+        return -KERR_INVAL;
     }
-    if (req->used) {
-        return -KERR_NOTSUP;
+    if (cmdline_len >= USERMODE_CMDLINE_MAX) {
+        return -KERR_INVAL;
     }
 
-    rc = usermode_copy_cstr(req->path,
-                            (uint32_t)sizeof(req->path),
+    rc = elf32_inspect_user_static_path(path, &layout);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!sched_user_image_range_available(layout.image_base, layout.image_size)) {
+        return -KERR_NOTSUP;
+    }
+
+    slot = usermode_child_slot_acquire(layout.image_base, layout.image_size);
+    if (!slot) {
+        return -KERR_NOTSUP;
+    }
+
+    rc = usermode_copy_cstr(slot->path,
+                            (uint32_t)sizeof(slot->path),
                             path);
     if (rc < 0) {
         return rc;
     }
+    slot->cmdline[0] = '\0';
+    if (cmdline_len != 0U) {
+        memcpy(slot->cmdline, cmdline, cmdline_len);
+    }
+    slot->cmdline[cmdline_len] = '\0';
+    slot->cmdline_len = cmdline_len;
+    slot->image_base = layout.image_base;
+    slot->image_size = layout.image_size;
 
-    req->used = 1;
-    rc = sched_spawn_user_child_task(req->task_name,
-                                     usermode_spawn_req_task,
-                                     (void *)req,
+    slot->used = 1;
+    rc = sched_spawn_user_child_task(slot->task_name,
+                                     usermode_child_slot_task,
+                                     (void *)slot,
                                      0,
                                      &child_pid);
     if (rc < 0) {
-        req->used = 0;
+        slot->used = 0;
+        slot->path[0] = '\0';
+        slot->cmdline[0] = '\0';
+        slot->cmdline_len = 0U;
+        slot->image_base = 0U;
+        slot->image_size = 0U;
         return rc;
     }
 
     KLOGI("usermode: spawned path task path=%s pid=%d slot=%x..%x",
-          req->path,
+          slot->path,
           child_pid,
-          req->image_base,
-          req->stack_base + req->stack_size);
+          slot->stack_base,
+          slot->stack_base + slot->stack_size);
     return child_pid;
 }
 
 void usermode_notify_task_reaped(const char *task_name) {
-    struct usermode_spawn_req *req;
+    struct usermode_child_slot *slot;
+    uint32_t image_base;
+    uint32_t image_size;
 
     if (!task_name) {
         return;
@@ -436,15 +489,21 @@ void usermode_notify_task_reaped(const char *task_name) {
         vfs_console_set_input_owner(VFS_CONSOLE_INPUT_OWNER_KERNEL);
         return;
     }
-    req = usermode_spawn_req_by_task_name(task_name);
-    if (!req || !req->used) {
+    slot = usermode_child_slot_by_task_name(task_name);
+    if (!slot || !slot->used) {
         return;
     }
 
-    req->used = 0;
-    req->path[0] = '\0';
+    image_base = slot->image_base;
+    image_size = slot->image_size;
+    slot->used = 0;
+    slot->path[0] = '\0';
+    slot->cmdline[0] = '\0';
+    slot->cmdline_len = 0U;
+    slot->image_base = 0U;
+    slot->image_size = 0U;
     KLOGI("usermode: released spawn slot task=%s image=%x..%x",
           task_name,
-          req->image_base,
-          req->stack_base + req->stack_size);
+          image_base,
+          image_base + image_size);
 }

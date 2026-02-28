@@ -39,7 +39,8 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/hello_slot2.o \
 	$(USERLAND_BUILD)/hello_slot3.o \
 	$(USERLAND_BUILD)/sh_slot4.o \
-	$(USERLAND_BUILD)/cat_slot5.o
+	$(USERLAND_BUILD)/cat_slot5.o \
+	$(USERLAND_BUILD)/echo_slot6.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -47,7 +48,8 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello3.elf \
 	$(USERLAND_BUILD)/hello4.elf \
 	$(USERLAND_BUILD)/sh.elf \
-	$(USERLAND_BUILD)/cat.elf
+	$(USERLAND_BUILD)/cat.elf \
+	$(USERLAND_BUILD)/echo.elf
 
 .PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-phase5 qemu-smoke-phase6 check
 
@@ -95,6 +97,9 @@ $(USERLAND_BUILD)/sh.elf: $(USERLAND_BUILD)/sh_slot4.o
 $(USERLAND_BUILD)/cat.elf: $(USERLAND_BUILD)/cat_slot5.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01467000 -o $@ $<
 
+$(USERLAND_BUILD)/echo.elf: $(USERLAND_BUILD)/echo_slot6.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01478000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -104,6 +109,7 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/hello4.elf $(INITRAMFS_STAGING)/bin/hello4.elf
 	cp $(USERLAND_BUILD)/sh.elf $(INITRAMFS_STAGING)/bin/sh.elf
 	cp $(USERLAND_BUILD)/cat.elf $(INITRAMFS_STAGING)/bin/cat.elf
+	cp $(USERLAND_BUILD)/echo.elf $(INITRAMFS_STAGING)/bin/echo.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -312,6 +318,8 @@ qemu-smoke-phase6:
 		sleep 1; \
 		printf 'cat readme.txt\n'; \
 		sleep 1; \
+		printf 'missing\n'; \
+		sleep 1; \
 		printf 'exit\n'; \
 	} | \
 	timeout -s INT -k 2s $(SMOKE_TIMEOUT_SECS)s $(QEMU) \
@@ -335,12 +343,12 @@ qemu-smoke-phase6:
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fo 'sh> ' $(BUILD)/qemu-smoke-phase6.log | wc -l)" -lt 4 ]; then \
+	@if [ "$$(grep -Fo 'sh> ' $(BUILD)/qemu-smoke-phase6.log | wc -l)" -lt 5 ]; then \
 		echo "[qemu-smoke-phase6] Missing repeated shell prompts"; \
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sh: builtins help echo wait ps exit; external names map to /bin/<name>.elf" $(BUILD)/qemu-smoke-phase6.log; then \
+	@if ! grep -Fq "sh: builtins help wait ps exit; external names map to /bin/<name>.elf" $(BUILD)/qemu-smoke-phase6.log; then \
 		echo "[qemu-smoke-phase6] Missing shell help output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
@@ -352,6 +360,11 @@ qemu-smoke-phase6:
 	fi
 	@if ! grep -Fq "cat: SkezOS tarfs demo" $(BUILD)/qemu-smoke-phase6.log; then \
 		echo "[qemu-smoke-phase6] Missing cat output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sh: command failed" $(BUILD)/qemu-smoke-phase6.log; then \
+		echo "[qemu-smoke-phase6] Missing unknown-command failure output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi
@@ -371,7 +384,8 @@ check:
 	@$(MAKE) toolchain-check
 	@$(MAKE) clean
 	@$(MAKE) all
-	@$(MAKE) qemu-smoke
+	@$(MAKE) qemu-smoke-userfault
+	@$(MAKE) qemu-smoke-phase6
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.elf

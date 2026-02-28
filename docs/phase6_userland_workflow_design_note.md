@@ -28,11 +28,12 @@ The interactive Phase 6 bootstrap slice is now in place:
 - the existing `/bin/hello*.elf` demo programs still use the shared assembly layer
 - `make` now builds mixed assembly/C userland programs, stages `/bin`, rebuilds the tar initramfs, and regenerates `kernel/initramfs_demo_blob.c`
 - the kernel directly boots a fixed-slot `/bin/sh.elf` task and hands `/dev/console` input ownership to `user-shell`
-- the shell now runs a real prompt/read/dispatch loop, supports `help`, `echo`, `wait`, `ps`, and `exit`, and launches fixed-slot external commands with `spawn` + `waitpid`
-- `/bin/cat.elf` is the first dedicated shell-driven external tool and prints `/bin/readme.txt`
-- `make qemu-smoke-phase6` now drives the shell through serial input and asserts real command execution instead of only the banner/prompt path
+- the shell now runs a real prompt/read/dispatch loop, keeps `help`, `wait`, `ps`, and `exit` as builtins, and launches external commands with `spawn` + `waitpid`
+- `SYS_SPAWN_EX` and `SYS_GETCMDLINE` now provide a narrow flat-cmdline handoff, so `/bin/echo.elf` and `/bin/cat.elf` run as real external tools
+- child launch now inspects fixed-address ET_EXEC images directly instead of relying on a per-path kernel whitelist, while boot shell startup remains fixed-slot
+- `make qemu-smoke-phase6` now drives the shell through serial input, asserts external `echo`/`cat`, and checks unknown-command failure handling
 
-This closes the console handoff blocker and proves the first end-to-end userland workflow. The phase still intentionally keeps the runtime narrow: there is no argv support, no general dynamic loader, and external tools still depend on the fixed-slot spawn table.
+This closes the console handoff blocker and proves the first end-to-end userland workflow. The phase still intentionally keeps the runtime narrow: there is no argv support, no relocatable/dynamic loader, and stdin remains pinned to the shell rather than the foreground child.
 
 ## Target user-visible outcome
 
@@ -59,10 +60,10 @@ Keep the first shell intentionally narrow:
 
 - single-line command input
 - whitespace tokenization only
-- builtins currently include `help`, `echo`, `wait`, `ps`, and `exit`
-- external command execution still focuses on fixed-slot `/bin/...` paths already wired into the loader
+- builtins currently include `help`, `wait`, `ps`, and `exit`
+- external command execution resolves `/bin/<name>.elf` and hands the remainder of the line to the child as one flat cmdline string
 - synchronous foreground execution only
-- no argv handoff to child processes yet (external `cat` ignores extra tokens and always prints `/bin/readme.txt`)
+- no argv handoff to child processes yet (children receive one raw string and must parse it themselves if needed)
 
 Do not add pipes, redirection, or job control in the initial shell.
 
@@ -70,11 +71,11 @@ Do not add pipes, redirection, or job control in the initial shell.
 
 Minimum shared userspace support should provide:
 
-- stable syscall wrappers for `write`, `read`, `exit`, `spawn`, `waitpid`, `open`, `close`, `yield`, `time`
+- stable syscall wrappers for `write`, `read`, `exit`, `spawn`, `spawn_ex`, `getcmdline`, `waitpid`, `open`, `close`, `yield`, `time`
 - string helpers needed by the first shell/tools
 - a small `_start` convention that hands control to a C-like `main` entry later, if desired
 
-The ABI boundary now stops being copied ad hoc into each program, but the spawn ABI is still intentionally path-only.
+The ABI boundary now stops being copied ad hoc into each program. The legacy `spawn` ABI remains path-only for compatibility, while `spawn_ex` adds the narrow cmdline handoff used by the shell.
 
 ## Validation
 
@@ -111,8 +112,8 @@ Current validation evidence for the interactive slice:
 
 ## Remaining limitations
 
-- `SYS_SPAWN` still maps a small fixed path table to fixed ET_EXEC slots; every new runnable tool still needs coordinated slot wiring in `memory_layout.h`, `usermode.c`, and `uaccess.c`
+- `SYS_SPAWN_EX` now inspects fixed-address ET_EXEC images directly and uses a reusable child stack pool, so new `/bin` tools no longer need kernel path-whitelist wiring
 - console read ownership is currently pinned to `user-shell` itself; foreground children are spawned and waited synchronously, but they are not handed stdin yet
 - the shell is intentionally foreground-only and does not implement pipes, redirection, quoting, escaping, or job control
-- `echo` is still a shell builtin because there is no argv/argc handoff yet
+- argument handoff is still cmdline-only (`SYS_GETCMDLINE`), not a real `argc/argv` startup ABI
 - `ps` is intentionally a stub until a real process-introspection kernel interface exists

@@ -1,6 +1,8 @@
 #ifndef USERMODE_H
 #define USERMODE_H
 
+#include <stdint.h>
+
 /* Spawn a temporary user-mode demo task backed by an in-memory code blob.
  * Returns 0 on success or negative -KERR_*.
  */
@@ -18,10 +20,11 @@ int usermode_spawn_elf_demo_task_b(void);
 /* Spawn the Phase 6 fixed-slot bootstrap shell task. */
 int usermode_spawn_shell_task(void);
 
-/* Minimal syscall-facing spawn hook for fixed-slot ELF demos.
+/* Minimal syscall-facing spawn hook for a path-only child launch.
  * Returns child pid (>0) on success or negative -KERR_* on failure.
  */
 int usermode_spawn_path_task(const char *path);
+int usermode_spawn_path_task_ex(const char *path, const char *cmdline, uint32_t cmdline_len);
 
 /* Scheduler callback used to release bootstrap spawn slots on task reap. */
 void usermode_notify_task_reaped(const char *task_name);

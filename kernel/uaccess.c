@@ -3,51 +3,11 @@
 #include <stdint.h>
 
 #include "kerrno.h"
-#include "memory_layout.h"
+#include "sched.h"
 #include "utils.h"
 
-static int uaccess_range_in_region(uint32_t addr, uint32_t len, uint32_t base, uint32_t limit) {
-    uint32_t range_end;
-
-    if (len == 0U) {
-        return 1;
-    }
-    if (addr < base) {
-        return 0;
-    }
-    range_end = addr + len;
-    if (range_end < addr) {
-        return 0;
-    }
-    if (range_end > limit) {
-        return 0;
-    }
-    return 1;
-}
-
 int uaccess_user_range_ok(uint32_t addr, uint32_t len) {
-    if (uaccess_range_in_region(addr, len, USER_DEMO_REGION_BASE, USER_DEMO_REGION_END)) {
-        return 1;
-    }
-    if (uaccess_range_in_region(addr, len, USER_ELF_SLOT0_REGION_BASE, USER_ELF_SLOT0_REGION_END)) {
-        return 1;
-    }
-    if (uaccess_range_in_region(addr, len, USER_ELF_SLOT1_REGION_BASE, USER_ELF_SLOT1_REGION_END)) {
-        return 1;
-    }
-    if (uaccess_range_in_region(addr, len, USER_ELF_SLOT2_REGION_BASE, USER_ELF_SLOT2_REGION_END)) {
-        return 1;
-    }
-    if (uaccess_range_in_region(addr, len, USER_ELF_SLOT3_REGION_BASE, USER_ELF_SLOT3_REGION_END)) {
-        return 1;
-    }
-    if (uaccess_range_in_region(addr, len, USER_ELF_SLOT4_REGION_BASE, USER_ELF_SLOT4_REGION_END)) {
-        return 1;
-    }
-    if (uaccess_range_in_region(addr, len, USER_ELF_SLOT5_REGION_BASE, USER_ELF_SLOT5_REGION_END)) {
-        return 1;
-    }
-    return 0;
+    return sched_current_user_range_ok(addr, len);
 }
 
 int uaccess_copy_from_user(void *dst, uint32_t src_addr, uint32_t len) {

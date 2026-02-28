@@ -15,6 +15,7 @@
 
 #define SCHED_MAX_TASKS         12
 #define SCHED_TASK_NAME_MAX     16
+#define SCHED_CMDLINE_MAX       128U
 #define SCHED_DEFAULT_STACK     (16U * 1024U)
 #define SCHED_DEFAULT_TIMESLICE 5U
 #define SCHED_WAIT_ANY_CHILD    (-1)
@@ -36,12 +37,18 @@ typedef enum {
 struct task_user_ctx {
     uint32_t entry_eip;
     uint32_t entry_esp;
+    uint32_t image_base;
+    uint32_t image_size;
+    uint32_t stack_base;
+    uint32_t stack_size;
     uint32_t last_user_eip;
     uint32_t last_fault_addr;
     uint32_t last_fault_err;
     uint32_t last_syscall_nr;
     uint32_t syscall_count;
     uint32_t fault_count;
+    uint32_t cmdline_len;
+    char cmdline[SCHED_CMDLINE_MAX];
     int32_t exit_code;
     int exit_code_valid;
 };
@@ -107,6 +114,11 @@ static int sched_find_matching_zombie_child_locked(struct task *parent,
                                                    struct task **out_zombie,
                                                    int *out_has_matching_child);
 static void sched_flush_deferred_stack_free_locked(void);
+static int sched_range_ok(uint32_t addr, uint32_t len, uint32_t base, uint32_t size);
+static int sched_ranges_overlap(uint32_t base_a,
+                                uint32_t size_a,
+                                uint32_t base_b,
+                                uint32_t size_b);
 
 static void sched_panic_unexpected_return(void) {
     KLOGP("scheduler returned to unexpected context");
@@ -236,6 +248,48 @@ static void sched_flush_deferred_stack_free_locked(void) {
     kmalloc_get_stats(&stats);
     KLOGI("sched: deferred stack reclaimed live_large=%u",
           (uint32_t)stats.large_bytes_used);
+}
+
+static int sched_range_ok(uint32_t addr, uint32_t len, uint32_t base, uint32_t size) {
+    uint32_t end;
+    uint32_t region_end;
+
+    if (len == 0U) {
+        return 1;
+    }
+    if (size == 0U) {
+        return 0;
+    }
+    if (addr < base) {
+        return 0;
+    }
+    end = addr + len;
+    if (end < addr) {
+        return 0;
+    }
+    region_end = base + size;
+    if (region_end < base) {
+        return 0;
+    }
+    return end <= region_end;
+}
+
+static int sched_ranges_overlap(uint32_t base_a,
+                                uint32_t size_a,
+                                uint32_t base_b,
+                                uint32_t size_b) {
+    uint32_t end_a;
+    uint32_t end_b;
+
+    if (size_a == 0U || size_b == 0U) {
+        return 0;
+    }
+    end_a = base_a + size_a;
+    end_b = base_b + size_b;
+    if (end_a < base_a || end_b < base_b) {
+        return 1;
+    }
+    return base_a < end_b && base_b < end_a;
 }
 
 static void sched_copy_task_name(char *dst, const char *src) {
@@ -519,6 +573,129 @@ int sched_mark_current_task_user_bootstrap(uint32_t user_eip, uint32_t user_esp)
     task->user.entry_esp = user_esp;
     task->user.last_user_eip = user_eip;
     return 0;
+}
+
+int sched_set_current_user_layout(uint32_t image_base,
+                                  uint32_t image_size,
+                                  uint32_t stack_base,
+                                  uint32_t stack_size) {
+    struct task *task = g_current_task;
+
+    if (!task) {
+        return -KERR_INVAL;
+    }
+    if ((image_size != 0U && image_base + image_size < image_base) ||
+        (stack_size != 0U && stack_base + stack_size < stack_base)) {
+        return -KERR_INVAL;
+    }
+
+    task->user.image_base = image_base;
+    task->user.image_size = image_size;
+    task->user.stack_base = stack_base;
+    task->user.stack_size = stack_size;
+    return 0;
+}
+
+int sched_current_user_range_ok(uint32_t addr, uint32_t len) {
+    struct task *task = g_current_task;
+
+    if (len == 0U) {
+        return 1;
+    }
+    if (!task || task->exec_mode != TASK_EXEC_USER_BOOTSTRAP) {
+        return 0;
+    }
+    if (sched_range_ok(addr, len, task->user.image_base, task->user.image_size)) {
+        return 1;
+    }
+    if (sched_range_ok(addr, len, task->user.stack_base, task->user.stack_size)) {
+        return 1;
+    }
+    return 0;
+}
+
+int sched_set_current_task_cmdline(const char *src, uint32_t len) {
+    struct task *task = g_current_task;
+    uint32_t copy_len;
+
+    if (!task) {
+        return -KERR_INVAL;
+    }
+    if (!src && len != 0U) {
+        return -KERR_INVAL;
+    }
+    if (len >= SCHED_CMDLINE_MAX) {
+        return -KERR_INVAL;
+    }
+
+    task->user.cmdline_len = 0U;
+    task->user.cmdline[0] = '\0';
+    if (len == 0U) {
+        return 0;
+    }
+
+    copy_len = len;
+    memcpy(task->user.cmdline, src, copy_len);
+    task->user.cmdline[copy_len] = '\0';
+    task->user.cmdline_len = copy_len;
+    return 0;
+}
+
+int sched_copy_current_task_cmdline_to_user(uint32_t dst_addr, uint32_t dst_len, uint32_t *out_len) {
+    struct task *task = g_current_task;
+    uint32_t copy_len = 0;
+
+    if (!out_len) {
+        return -KERR_INVAL;
+    }
+    *out_len = 0U;
+    if (!task || task->exec_mode != TASK_EXEC_USER_BOOTSTRAP) {
+        return -KERR_NOTSUP;
+    }
+    if (dst_len == 0U) {
+        return 0;
+    }
+    if (!sched_current_user_range_ok(dst_addr, dst_len)) {
+        return -KERR_FAULT;
+    }
+
+    if (task->user.cmdline_len < (dst_len - 1U)) {
+        copy_len = task->user.cmdline_len;
+    } else {
+        copy_len = dst_len - 1U;
+    }
+    if (copy_len != 0U) {
+        memcpy((void *)(uintptr_t)dst_addr, task->user.cmdline, copy_len);
+    }
+    ((char *)(uintptr_t)dst_addr)[copy_len] = '\0';
+    *out_len = copy_len;
+    return 0;
+}
+
+int sched_user_image_range_available(uint32_t image_base, uint32_t image_size) {
+    if (image_size == 0U || image_base + image_size < image_base) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < SCHED_MAX_TASKS; i++) {
+        const struct task *task = &g_tasks[i];
+
+        if (task->state == TASK_UNUSED || task->exec_mode != TASK_EXEC_USER_BOOTSTRAP) {
+            continue;
+        }
+        if (sched_ranges_overlap(image_base,
+                                 image_size,
+                                 task->user.image_base,
+                                 task->user.image_size) ||
+            sched_ranges_overlap(image_base,
+                                 image_size,
+                                 task->user.stack_base,
+                                 task->user.stack_size)) {
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 void sched_note_current_syscall(uint32_t syscall_nr) {

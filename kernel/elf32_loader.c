@@ -51,6 +51,23 @@ struct elf32_phdr {
     uint32_t p_align;
 } __attribute__((packed));
 
+static uint32_t elf32_page_floor(uint32_t addr) {
+    return addr & ~(PAGE_SIZE_BYTES - 1U);
+}
+
+static int elf32_page_ceil(uint32_t addr, uint32_t *out_addr) {
+    uint32_t rounded = addr + (PAGE_SIZE_BYTES - 1U);
+
+    if (rounded < addr) {
+        return 0;
+    }
+    rounded &= ~(PAGE_SIZE_BYTES - 1U);
+    if (out_addr) {
+        *out_addr = rounded;
+    }
+    return 1;
+}
+
 static int elf32_add_u32_ok(uint32_t a, uint32_t b, uint32_t *out_sum) {
     uint32_t sum = a + b;
     if (sum < a) {
@@ -218,6 +235,132 @@ static int elf32_validate_ehdr(const char *path,
     return 0;
 }
 
+static int elf32_collect_user_layout(const char *path,
+                                     const struct elf32_ehdr *ehdr,
+                                     uint32_t file_size,
+                                     const uint8_t *file_buf,
+                                     struct elf32_user_layout *out_layout) {
+    uint32_t ph_table_bytes;
+    uint32_t ph_table_end;
+    const struct elf32_phdr *phdrs;
+    uint32_t load_segments = 0;
+    uint32_t image_base = 0U;
+    uint32_t image_end = 0U;
+
+    if (!ehdr || !file_buf || !out_layout) {
+        return -KERR_INVAL;
+    }
+
+    if (!elf32_mul_u32_ok((uint32_t)ehdr->e_phnum, (uint32_t)ehdr->e_phentsize, &ph_table_bytes) ||
+        !elf32_add_u32_ok(ehdr->e_phoff, ph_table_bytes, &ph_table_end)) {
+        KLOGW("elf32: phdr overflow path=%s", path);
+        return -KERR_INVAL;
+    }
+    if (ehdr->e_phoff > file_size || ph_table_bytes > (file_size - ehdr->e_phoff)) {
+        KLOGW("elf32: phdr table out of range path=%s phoff=%u size=%u file=%u",
+              path, ehdr->e_phoff, ph_table_bytes, file_size);
+        return -KERR_INVAL;
+    }
+    phdrs = (const struct elf32_phdr *)(const void *)(file_buf + ehdr->e_phoff);
+
+    for (uint32_t i = 0; i < ehdr->e_phnum; i++) {
+        const struct elf32_phdr *ph = &phdrs[i];
+        uint32_t seg_end;
+        uint32_t file_end;
+        uint32_t seg_base_aligned;
+        uint32_t seg_end_aligned;
+
+        if (ph->p_type != PT_LOAD || ph->p_memsz == 0U) {
+            continue;
+        }
+        if (ph->p_filesz > ph->p_memsz) {
+            KLOGW("elf32: bad segment sizes path=%s idx=%u filesz=%u memsz=%u",
+                  path, i, ph->p_filesz, ph->p_memsz);
+            return -KERR_INVAL;
+        }
+        if (!elf32_add_u32_ok(ph->p_offset, ph->p_filesz, &file_end) || file_end > file_size) {
+            KLOGW("elf32: segment file range invalid path=%s idx=%u off=%u filesz=%u file=%u",
+                  path, i, ph->p_offset, ph->p_filesz, file_size);
+            return -KERR_INVAL;
+        }
+        if (!elf32_add_u32_ok(ph->p_vaddr, ph->p_memsz, &seg_end)) {
+            KLOGW("elf32: segment address overflow path=%s idx=%u vaddr=%x memsz=%u",
+                  path, i, ph->p_vaddr, ph->p_memsz);
+            return -KERR_INVAL;
+        }
+
+        seg_base_aligned = elf32_page_floor(ph->p_vaddr);
+        if (!elf32_page_ceil(seg_end, &seg_end_aligned)) {
+            KLOGW("elf32: segment page align overflow path=%s idx=%u end=%x",
+                  path, i, seg_end);
+            return -KERR_INVAL;
+        }
+        if (seg_end_aligned > KERNEL_EARLY_MAP_BYTES) {
+            KLOGW("elf32: segment outside low map path=%s idx=%u seg=%x..%x",
+                  path, i, seg_base_aligned, seg_end_aligned);
+            return -KERR_INVAL;
+        }
+
+        if (load_segments == 0U || seg_base_aligned < image_base) {
+            image_base = seg_base_aligned;
+        }
+        if (load_segments == 0U || seg_end_aligned > image_end) {
+            image_end = seg_end_aligned;
+        }
+        load_segments++;
+    }
+
+    if (load_segments == 0U) {
+        KLOGW("elf32: no loadable segments path=%s", path);
+        return -KERR_INVAL;
+    }
+    if (image_end <= image_base) {
+        KLOGW("elf32: invalid image window path=%s image=%x..%x",
+              path, image_base, image_end);
+        return -KERR_INVAL;
+    }
+    if (!elf32_range_contains(image_base, image_end - image_base, ehdr->e_entry, 1U)) {
+        KLOGW("elf32: entry outside image path=%s entry=%x image=%x..%x",
+              path, ehdr->e_entry, image_base, image_end);
+        return -KERR_INVAL;
+    }
+
+    out_layout->entry_eip = ehdr->e_entry;
+    out_layout->image_base = image_base;
+    out_layout->image_size = image_end - image_base;
+    return 0;
+}
+
+int elf32_inspect_user_static_path(const char *path, struct elf32_user_layout *out_layout) {
+    uint8_t *file_buf = 0;
+    uint32_t file_size = 0;
+    const struct elf32_ehdr *ehdr = 0;
+    struct kmalloc_stats stats;
+    int rc;
+
+    if (!path || !out_layout) {
+        return -KERR_INVAL;
+    }
+
+    rc = elf32_read_file(path, &file_buf, &file_size);
+    if (rc < 0) {
+        return rc;
+    }
+
+    rc = elf32_validate_ehdr(path, file_buf, file_size, &ehdr);
+    if (rc >= 0) {
+        rc = elf32_collect_user_layout(path, ehdr, file_size, file_buf, out_layout);
+    }
+
+    if (file_buf) {
+        kfree(file_buf);
+        kmalloc_get_stats(&stats);
+        KLOGI("elf32: scratch reclaimed path=%s live_large=%u",
+              path, (uint32_t)stats.large_bytes_used);
+    }
+    return rc;
+}
+
 int elf32_load_user_static_path(const char *path,
                                 uint32_t image_base,
                                 uint32_t image_size,
@@ -227,10 +370,9 @@ int elf32_load_user_static_path(const char *path,
     uint8_t *file_buf = 0;
     uint32_t file_size = 0;
     const struct elf32_ehdr *ehdr;
+    struct elf32_user_layout layout;
     uint32_t image_end;
     uint32_t stack_end;
-    uint32_t ph_table_bytes;
-    uint32_t ph_table_end;
     const struct elf32_phdr *phdrs;
     uint32_t load_segments = 0;
     struct kmalloc_stats stats;
@@ -260,22 +402,17 @@ int elf32_load_user_static_path(const char *path,
         goto cleanup;
     }
 
-    if (!elf32_range_contains(image_base, image_size, ehdr->e_entry, 1U)) {
-        KLOGW("elf32: entry outside image path=%s entry=%x image=%x..%x",
-              path, ehdr->e_entry, image_base, image_end);
-        rc = -KERR_INVAL;
+    rc = elf32_collect_user_layout(path, ehdr, file_size, file_buf, &layout);
+    if (rc < 0) {
         goto cleanup;
     }
-
-    if (!elf32_mul_u32_ok((uint32_t)ehdr->e_phnum, (uint32_t)ehdr->e_phentsize, &ph_table_bytes) ||
-        !elf32_add_u32_ok(ehdr->e_phoff, ph_table_bytes, &ph_table_end)) {
-        KLOGW("elf32: phdr overflow path=%s", path);
-        rc = -KERR_INVAL;
-        goto cleanup;
-    }
-    if (ehdr->e_phoff > file_size || ph_table_bytes > (file_size - ehdr->e_phoff)) {
-        KLOGW("elf32: phdr table out of range path=%s phoff=%u size=%u file=%u",
-              path, ehdr->e_phoff, ph_table_bytes, file_size);
+    if (!elf32_range_contains(image_base, image_size, layout.image_base, layout.image_size)) {
+        KLOGW("elf32: image outside reserved window path=%s window=%x..%x actual=%x..%x",
+              path,
+              image_base,
+              image_end,
+              layout.image_base,
+              layout.image_base + layout.image_size);
         rc = -KERR_INVAL;
         goto cleanup;
     }
@@ -352,8 +489,8 @@ int elf32_load_user_static_path(const char *path,
     if (out_image) {
         out_image->entry_eip = ehdr->e_entry;
         out_image->stack_top = stack_end;
-        out_image->image_base = image_base;
-        out_image->image_size = image_size;
+        out_image->image_base = layout.image_base;
+        out_image->image_size = layout.image_size;
     }
 
     KLOGI("elf32: loaded path=%s entry=%x ph=%u loads=%u image=%x..%x stack=%x..%x",
@@ -375,4 +512,23 @@ cleanup:
               path, (uint32_t)stats.large_bytes_used);
     }
     return rc;
+}
+
+int elf32_load_user_static_path_auto(const char *path,
+                                     uint32_t stack_base,
+                                     uint32_t stack_size,
+                                     struct elf32_user_image *out_image) {
+    struct elf32_user_layout layout;
+    int rc;
+
+    rc = elf32_inspect_user_static_path(path, &layout);
+    if (rc < 0) {
+        return rc;
+    }
+    return elf32_load_user_static_path(path,
+                                       layout.image_base,
+                                       layout.image_size,
+                                       stack_base,
+                                       stack_size,
+                                       out_image);
 }

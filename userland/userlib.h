@@ -63,6 +63,19 @@ static inline int32_t user_spawn(const char *path, uint32_t path_len) {
     return user_syscall2(SYS_SPAWN, (uint32_t)(uintptr_t)path, path_len);
 }
 
+static inline int32_t user_spawn_ex(const char *path,
+                                    uint32_t path_len,
+                                    const char *cmdline,
+                                    uint32_t cmdline_len) {
+    struct syscall_spawn_ex_req req;
+
+    req.path_ptr = (uint32_t)(uintptr_t)path;
+    req.path_len = path_len;
+    req.cmdline_ptr = cmdline_len == 0U ? 0U : (uint32_t)(uintptr_t)cmdline;
+    req.cmdline_len = cmdline_len;
+    return user_syscall1(SYS_SPAWN_EX, (uint32_t)(uintptr_t)&req);
+}
+
 static inline int32_t user_open(const char *path, uint32_t path_len, uint32_t flags) {
     return user_syscall3(SYS_OPEN, (uint32_t)(uintptr_t)path, path_len, flags);
 }
@@ -76,6 +89,10 @@ static inline int32_t user_waitpid(int32_t pid, int32_t *status, uint32_t option
                          (uint32_t)pid,
                          (uint32_t)(uintptr_t)status,
                          options);
+}
+
+static inline int32_t user_getcmdline(char *buf, uint32_t buf_len) {
+    return user_syscall2(SYS_GETCMDLINE, (uint32_t)(uintptr_t)buf, buf_len);
 }
 
 static inline void user_yield(void) {

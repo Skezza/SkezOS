@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-/* Bootstrap user-memory validation against fixed demo/user ELF regions.
- * Replace with per-process address-space checks in a later phase.
+/* Validate a user buffer against the current task's recorded image and stack
+ * ranges.
  */
 int uaccess_user_range_ok(uint32_t addr, uint32_t len);
 
