@@ -29,8 +29,10 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 
 <img width="1124" height="858" alt="Screenshot from 2026-02-13 00-15-09" src="https://github.com/user-attachments/assets/a12490a1-f83a-4b03-827b-6973b0909c65" />
 
-**Framebuffer!** :-)
-<img width="1052" height="863" alt="image" src="https://github.com/user-attachments/assets/8cdc7ca0-920d-4bfc-9417-a816c3d765af" />
+**Framebuffer support!** :-)
+
+<img width="1052" height="863" alt="image" src="https://github.com/user-attachments/assets/8d7cdf98-b555-4784-826e-2409a56afc64" />
+
 
 
 ### Keep tinkering
