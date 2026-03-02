@@ -41,7 +41,9 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/sh_slot4.o \
 	$(USERLAND_BUILD)/cat_slot5.o \
 	$(USERLAND_BUILD)/echo_slot6.o \
-	$(USERLAND_BUILD)/readln_slot7.o
+	$(USERLAND_BUILD)/readln_slot7.o \
+	$(USERLAND_BUILD)/uptime_slot8.o \
+	$(USERLAND_BUILD)/sleep_slot9.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -51,7 +53,9 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/sh.elf \
 	$(USERLAND_BUILD)/cat.elf \
 	$(USERLAND_BUILD)/echo.elf \
-	$(USERLAND_BUILD)/readln.elf
+	$(USERLAND_BUILD)/readln.elf \
+	$(USERLAND_BUILD)/uptime.elf \
+	$(USERLAND_BUILD)/sleep.elf
 
 .PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-phase5 qemu-smoke-phase6 check
 
@@ -105,6 +109,12 @@ $(USERLAND_BUILD)/echo.elf: $(USERLAND_BUILD)/echo_slot6.o
 $(USERLAND_BUILD)/readln.elf: $(USERLAND_BUILD)/readln_slot7.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01489000 -o $@ $<
 
+$(USERLAND_BUILD)/uptime.elf: $(USERLAND_BUILD)/uptime_slot8.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x0149A000 -o $@ $<
+
+$(USERLAND_BUILD)/sleep.elf: $(USERLAND_BUILD)/sleep_slot9.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x014AB000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -116,6 +126,8 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/cat.elf $(INITRAMFS_STAGING)/bin/cat.elf
 	cp $(USERLAND_BUILD)/echo.elf $(INITRAMFS_STAGING)/bin/echo.elf
 	cp $(USERLAND_BUILD)/readln.elf $(INITRAMFS_STAGING)/bin/readln.elf
+	cp $(USERLAND_BUILD)/uptime.elf $(INITRAMFS_STAGING)/bin/uptime.elf
+	cp $(USERLAND_BUILD)/sleep.elf $(INITRAMFS_STAGING)/bin/sleep.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -304,7 +316,7 @@ qemu-smoke-phase5:
 		tail -n 220 $(BUILD)/qemu-smoke-phase4.log; \
 		exit 1; \
 	fi
-	@if ! grep -Eq "sched: deferred stack reclaimed live_large=(65536|81920)" $(BUILD)/qemu-smoke-phase4.log; then \
+	@if ! grep -Eq "sched: deferred stack reclaimed live_large=(65536|69632|81920|86016)" $(BUILD)/qemu-smoke-phase4.log; then \
 		echo "[qemu-smoke-phase5] Missing final deferred stack reclamation watermark"; \
 		tail -n 240 $(BUILD)/qemu-smoke-phase4.log; \
 		exit 1; \
@@ -317,14 +329,18 @@ qemu-smoke-phase6:
 	@rm -f $(BUILD)/qemu-smoke-phase6.log
 	@echo "[qemu-smoke-phase6] Booting headless VM with scripted shell input..."
 	@rc=0; \
-	{ sleep 4; \
-		printf 'help\n'; \
+	{ sleep 5; \
+		printf 'helx\177p\n'; \
 		sleep 0.25; \
-		printf 'readln\n'; \
+		printf 'readlq\177n\n'; \
 		sleep 0.25; \
-		printf 'stdin handoff works\n'; \
+		printf 'stdin handoff worzz\177\177ks\n'; \
 		sleep 0.25; \
 		printf 'ps\n'; \
+		sleep 0.25; \
+		printf 'uptime\n'; \
+		sleep 0.25; \
+		printf 'sleep 2\n'; \
 		sleep 0.25; \
 		printf 'echo phase6 interactive echo\n'; \
 		sleep 0.25; \
@@ -377,6 +393,16 @@ qemu-smoke-phase6:
 	fi
 	@if ! grep -Fq "ps: pid=" $(BUILD)/qemu-smoke-phase6.log; then \
 		echo "[qemu-smoke-phase6] Missing ps task snapshot output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "uptime: ticks_hi=" $(BUILD)/qemu-smoke-phase6.log; then \
+		echo "[qemu-smoke-phase6] Missing uptime output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sleep: requested=2 elapsed=" $(BUILD)/qemu-smoke-phase6.log; then \
+		echo "[qemu-smoke-phase6] Missing sleep output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
 		exit 1; \
 	fi

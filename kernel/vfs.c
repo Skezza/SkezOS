@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "display.h"
 #include "kassert.h"
 #include "kerrno.h"
 #include "kfile.h"
@@ -10,7 +11,6 @@
 #include "sched.h"
 #include "serial.h"
 #include "utils.h"
-#include "vga.h"
 
 #define VFS_BOOTSTRAP_ROOT_MAX_CHILDREN 8U
 
@@ -178,6 +178,7 @@ static int vfs_devnull_write(struct kfile *file, const void *buf, uint32_t len, 
 static int vfs_console_read(struct kfile *file, void *buf, uint32_t len, uint32_t *out_read) {
     char *dst = (char *)buf;
     uint32_t n = 0;
+    int should_block;
 
     (void)file;
     if (out_read) {
@@ -191,13 +192,25 @@ static int vfs_console_read(struct kfile *file, void *buf, uint32_t len, uint32_
         return 0;
     }
 
-    /* Bootstrap behavior: non-blocking read from the shared keyboard ring.
-     * Returns 0 bytes when no input is available.
+    should_block = sched_current_task_is_user() &&
+                   g_vfs_console_input_owner == VFS_CONSOLE_INPUT_OWNER_USER_TASK &&
+                   sched_current_task_pid() == g_vfs_console_input_owner_pid;
+
+    /* The console owner now gets blocking reads from the shared input path.
+     * Keep returning short reads after the first byte so existing callers
+     * still receive whatever is already buffered.
      */
     while (n < len) {
         int ch = vfs_console_poll_input_char();
         if (ch < 0) {
-            break;
+            if (n != 0U || !should_block) {
+                break;
+            }
+            /* Keep polling through the existing path so serial-fed scripted
+             * input still gets folded into the keyboard buffer.
+             */
+            sched_sleep_ticks(1U);
+            continue;
         }
         dst[n++] = (char)(uint8_t)ch;
     }
@@ -218,7 +231,7 @@ static int vfs_console_write(struct kfile *file, const void *buf, uint32_t len, 
             serial_writechar('\r');
         }
         serial_writechar(c);
-        vga_putc(c);
+        display_putc(c);
     }
     if (out_written) {
         *out_written = len;
@@ -229,15 +242,15 @@ static int vfs_console_write(struct kfile *file, const void *buf, uint32_t len, 
 
 static void vfs_console_write_lock(void) {
     for (;;) {
-        uint32_t saved_flags = vga_console_enter_critical();
+        uint32_t saved_flags = display_console_enter_critical();
 
         if (!g_vfs_console_write_locked) {
             g_vfs_console_write_locked = 1;
-            vga_console_leave_critical(saved_flags);
+            display_console_leave_critical(saved_flags);
             return;
         }
 
-        vga_console_leave_critical(saved_flags);
+        display_console_leave_critical(saved_flags);
         if (sched_current_task_pid() > 0) {
             sched_yield();
         }
@@ -245,10 +258,10 @@ static void vfs_console_write_lock(void) {
 }
 
 static void vfs_console_write_unlock(void) {
-    uint32_t saved_flags = vga_console_enter_critical();
+    uint32_t saved_flags = display_console_enter_critical();
 
     g_vfs_console_write_locked = 0;
-    vga_console_leave_critical(saved_flags);
+    display_console_leave_critical(saved_flags);
 }
 
 static const struct kfile_ops g_vfs_devnull_file_ops = {

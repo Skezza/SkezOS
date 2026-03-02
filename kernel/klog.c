@@ -3,8 +3,8 @@
 #include <stdarg.h>
 #include <stdint.h>
 
+#include "display.h"
 #include "serial.h"
-#include "vga.h"
 
 static klog_level_t g_klog_min_level = KLOG_LEVEL_INFO;
 
@@ -24,7 +24,7 @@ static void klog_write_char(klog_level_t level, char c) {
     }
     serial_writechar(c);
     if (level >= KLOG_LEVEL_WARN) {
-        vga_putc(c);
+        display_putc(c);
     }
 }
 
@@ -90,7 +90,7 @@ void klogf(klog_level_t level, const char *fmt, ...) {
         return;
     }
 
-    saved_flags = vga_console_enter_critical();
+    saved_flags = display_console_enter_critical();
     klog_write_char(level, '[');
     klog_write_str(level, klog_level_name(level));
     klog_write_str(level, "] ");
@@ -146,5 +146,5 @@ void klogf(klog_level_t level, const char *fmt, ...) {
     va_end(ap);
 
     klog_write_char(level, '\n');
-    vga_console_leave_critical(saved_flags);
+    display_console_leave_critical(saved_flags);
 }

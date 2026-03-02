@@ -405,8 +405,29 @@ static uint32_t sys_sleep(struct syscall_saved_regs *regs) {
     return 0;
 }
 
+static uint32_t sys_time_info(struct syscall_saved_regs *regs) {
+    uint32_t dst_ptr = regs->ebx;
+    struct syscall_time_info info;
+    uint64_t ticks = timer_ticks_snapshot();
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    info.ticks_lo = (uint32_t)ticks;
+    info.ticks_hi = (uint32_t)(ticks >> 32);
+    info.hz = timer_frequency_hz();
+
+    rc = uaccess_copy_to_user(dst_ptr, &info, (uint32_t)sizeof(info));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 0;
+}
+
 static uint32_t sys_time(void) {
-    return (uint32_t)timer_ticks;
+    return (uint32_t)timer_ticks_snapshot();
 }
 
 static void sys_exit(struct syscall_saved_regs *regs) __attribute__((noreturn));
@@ -457,6 +478,8 @@ uint32_t syscall_dispatch(struct syscall_saved_regs *regs) {
             return sys_task_snapshot(regs);
         case SYS_SLEEP:
             return sys_sleep(regs);
+        case SYS_TIME_INFO:
+            return sys_time_info(regs);
         case SYS_GETCMDLINE:
             return sys_getcmdline(regs);
         default:

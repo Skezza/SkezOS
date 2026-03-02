@@ -20,6 +20,7 @@ static const char kSpawnFail[] = "sh: command failed\n";
 static const char kWaitFail[] = "sh: waitpid failed\n";
 static const char kExit[] = "sh: bootstrap shell exit\n";
 static const char kNewline[] = "\n";
+static const char kEraseOne[] = "\b \b";
 
 static void shell_write_all(const char *buf, uint32_t len) {
     while (len > 0U) {
@@ -38,6 +39,10 @@ static void shell_write_str(const char *s) {
 
 static void shell_write_char(char ch) {
     shell_write_all(&ch, 1U);
+}
+
+static void shell_erase_one_char(void) {
+    shell_write_all(kEraseOne, (uint32_t)(sizeof(kEraseOne) - 1U));
 }
 
 static void shell_write_u32(uint32_t value) {
@@ -134,17 +139,15 @@ static void shell_run_ps(void) {
 
 static int32_t shell_read_char_blocking(void) {
     char ch;
+    int32_t rc = user_read(USER_FD_STDIN, &ch, 1U);
 
-    for (;;) {
-        int32_t rc = user_read(USER_FD_STDIN, &ch, 1U);
-        if (rc == 1) {
-            return (int32_t)(uint8_t)ch;
-        }
-        if (rc < 0) {
-            return rc;
-        }
-        user_sleep_ticks(1U);
+    if (rc == 1) {
+        return (int32_t)(uint8_t)ch;
     }
+    if (rc < 0) {
+        return rc;
+    }
+    return -1;
 }
 
 static int32_t shell_read_line(char *buf, uint32_t cap) {
@@ -162,9 +165,10 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
         if (ch == '\r') {
             ch = '\n';
         }
-        if (ch == '\b') {
+        if (ch == '\b' || ch == 0x7f) {
             if (len > 0U) {
                 len--;
+                shell_erase_one_char();
             }
             continue;
         }

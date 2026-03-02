@@ -16,17 +16,18 @@ It is the implementation-facing companion to `technical_considerations.md`.
 
 ## Boot sequencing contract
 
-1. `serial_init()` and `vga_clear()`
+1. `serial_init()` and `display_init()` (currently VGA-backed)
 2. `gdt_init()` (kernel/user segments + TSS)
 3. Parse multiboot memory map (`memmap_parse`)
 4. PMM self-checks (pre-paging)
 5. Paging init + enable
 6. Heap init (`kmalloc_init`)
 7. Post-paging self-checks
-8. Interrupts/IRQ/timer/keyboard setup
-9. `syscall_init()` (`int 0x80` gate)
-10. Scheduler init + task creation
-11. Scheduler start (enters kernel tasks)
+8. `display_late_init()` (claims optional non-VGA display resources once mapping/heap exist)
+9. Interrupts/IRQ/timer/keyboard setup
+10. `syscall_init()` (`int 0x80` gate)
+11. Scheduler init + task creation
+12. Scheduler start (enters kernel tasks)
 
 The current paging setup maps the first `32 MiB`, which intentionally keeps the
 PMM bitmap (`16 MiB`) accessible after paging enable. If either value changes,

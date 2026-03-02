@@ -58,7 +58,9 @@ int vfs_lookup(const char *path, struct vfs_node **out_node);
 int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file);
 
 /* `/dev/console` input remains single-owner. Ownership starts in the kernel
- * console task, then can be handed to one user task at a time.
+ * console task, then can be handed to one user task at a time. The raw poll
+ * helper stays non-blocking; the owning user task gets blocking behavior in
+ * the `/dev/console` read path.
  */
 void vfs_console_set_input_owner_kernel(void);
 int vfs_console_set_input_owner_task(int pid);

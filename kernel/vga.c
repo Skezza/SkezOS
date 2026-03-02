@@ -7,13 +7,28 @@
 static volatile uint16_t *const VGA = (uint16_t *)0xB8000;
 static const uint8_t VGA_ROWS = 25U;
 static const uint8_t VGA_COLS = 80U;
+static const uint8_t VGA_CHROME_ROWS = 2U;
+static const uint8_t VGA_CHROME_TITLE_COLOUR = 0x1FU;  /* bright white on blue */
+static const uint8_t VGA_CHROME_STATUS_COLOUR = 0x70U; /* black on light gray */
 static uint8_t row = 0;
 static uint8_t col = 0;
 static uint8_t colour = 0x0F; /* white on black */
 
-static void vga_clear_row(uint8_t target_row) {
+static void vga_fill_row(uint8_t target_row, uint8_t target_colour) {
     for (uint8_t c = 0; c < VGA_COLS; c++) {
-        VGA[target_row * VGA_COLS + c] = ((uint16_t)colour << 8) | ' ';
+        VGA[target_row * VGA_COLS + c] = ((uint16_t)target_colour << 8) | ' ';
+    }
+}
+
+static void vga_write_row_text(uint8_t target_row, uint8_t start_col,
+                               uint8_t target_colour, const char *text) {
+    uint8_t c = start_col;
+
+    while (*text != '\0' && c < VGA_COLS) {
+        VGA[target_row * VGA_COLS + c] =
+            ((uint16_t)target_colour << 8) | (uint8_t)(*text);
+        c++;
+        text++;
     }
 }
 
@@ -22,20 +37,31 @@ static void vga_scroll_if_needed(void) {
         return;
     }
 
-    for (uint8_t r = 1; r < VGA_ROWS; r++) {
+    for (uint8_t r = (uint8_t)(VGA_CHROME_ROWS + 1U); r < VGA_ROWS; r++) {
         for (uint8_t c = 0; c < VGA_COLS; c++) {
             VGA[(r - 1U) * VGA_COLS + c] = VGA[r * VGA_COLS + c];
         }
     }
-    vga_clear_row((uint8_t)(VGA_ROWS - 1U));
+    vga_fill_row((uint8_t)(VGA_ROWS - 1U), colour);
     row = (uint8_t)(VGA_ROWS - 1U);
+}
+
+static void vga_draw_chrome(void) {
+    vga_fill_row(0U, VGA_CHROME_TITLE_COLOUR);
+    vga_write_row_text(0U, 2U, VGA_CHROME_TITLE_COLOUR,
+                       "SkezOS // Visual Shell Preview");
+
+    vga_fill_row(1U, VGA_CHROME_STATUS_COLOUR);
+    vga_write_row_text(1U, 2U, VGA_CHROME_STATUS_COLOUR,
+                       "Mode: VGA text  |  Shell: live  |  Next: framebuffer");
 }
 
 void vga_clear(void) {
     for (uint8_t r = 0; r < VGA_ROWS; r++) {
-        vga_clear_row(r);
+        vga_fill_row(r, colour);
     }
-    row = 0;
+    vga_draw_chrome();
+    row = VGA_CHROME_ROWS;
     col = 0;
 }
 
@@ -65,11 +91,23 @@ void vga_putc(char c) {
         col = 0;
         return;
     }
+    if (c == '\b') {
+        if (col > 0) {
+            col--;
+        } else if (row > VGA_CHROME_ROWS) {
+            row--;
+            col = (uint8_t)(VGA_COLS - 1U);
+        }
+        return;
+    }
     if (c == '\n') {
         row++;
         col = 0;
         vga_scroll_if_needed();
         return;
+    }
+    if (row < VGA_CHROME_ROWS) {
+        row = VGA_CHROME_ROWS;
     }
     VGA[row * VGA_COLS + col] = ((uint16_t)colour << 8) | (uint8_t)c;
     col++;

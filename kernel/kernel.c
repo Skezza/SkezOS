@@ -1,10 +1,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "kassert.h"
+#include "display.h"
 #include "klog.h"
 #include "memory_layout.h"
 #include "serial.h"
-#include "vga.h"
 #include "panic.h"
 #include "gdt.h"
 #include "interrupts.h"
@@ -115,17 +115,17 @@ static void handle_input_char(char c) {
         serial_writestr(verbose ? "\nVerbose keyboard logging enabled\n" : "\nVerbose keyboard logging disabled\n");
         return;
     }
-    saved_flags = vga_console_enter_critical();
-    vga_putc(c);
+    saved_flags = display_console_enter_critical();
+    display_putc(c);
     serial_writechar(c);
-    vga_console_leave_critical(saved_flags);
+    display_console_leave_critical(saved_flags);
 }
 
 static void console_task(void *arg) {
     (void)arg;
     KLOGI("console task online");
     if (vfs_console_get_input_owner() == VFS_CONSOLE_INPUT_OWNER_KERNEL) {
-        vga_puts("Ready> ");
+        display_puts("Ready> ");
     }
     for (;;) {
         int ch;
@@ -158,9 +158,9 @@ static void demo_worker_task(void *arg) {
 }
 
 void kmain(uint32_t magic, uint32_t mb2_addr) {
-    // Initialize serial and VGA outputs
+    // Initialize serial and display outputs
     serial_init();
-    vga_clear();
+    display_init();
     klog_set_level(KLOG_LEVEL_INFO);
     gdt_init();
     // ASCII logo for SkezOS
@@ -176,11 +176,11 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     #if LOG_BOOT_SERIAL
     serial_writestr(logo);
     #endif
-    vga_puts(logo);
+    display_puts(logo);
     #if LOG_BOOT_SERIAL
     serial_writestr("SkezOS booting...\n");
     #endif
-    vga_puts("SkezOS booting...\n");
+    display_puts("SkezOS booting...\n");
 
     // Parse memory map and initialize memory management
     memmap_parse(magic, mb2_addr);
@@ -193,6 +193,7 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     // Initialize a simple kernel heap in the higher-half direct map window.
     kmalloc_init((void *)KERNEL_HEAP_START, KERNEL_HEAP_SIZE_BYTES);
     boot_self_checks_post_paging();
+    display_late_init();
     vfs_init();
     KASSERT(tarfs_mount_demo_archive() == 0);
 
@@ -227,7 +228,7 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     serial_writestr("kernel initialised\n");
     #endif
     klog_serial_raw(SMOKE_READY_MARKER);
-    vga_puts("kernel initialised\n");
+    display_puts("kernel initialised\n");
     KLOGI("sched: starting");
     sched_start();
 }

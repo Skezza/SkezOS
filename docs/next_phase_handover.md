@@ -3,6 +3,18 @@
 Date: 2026-02-28
 Scope: handoff for the next agentic worker after Phase 6 completion
 
+## Status note (2026-02-28)
+
+This handover is now historical context.
+
+The foreground I/O / ergonomics work described below is complete, and the immediate timing follow-up (`uptime` + `sleep`) has also landed. The active follow-on is now:
+
+- `Phase 9 - Framebuffer bring-up and visual shell`
+- first landed slice: the existing shell now boots under a fixed VGA text-mode chrome header so the system gets an immediate visual upgrade without changing the runtime model
+- early groundwork now in place: the kernel captures the bootloader framebuffer descriptor when the Multiboot tag is present
+- the framebuffer path is now live again: the kernel requests an optional `1024x768x32` mode, maps direct-RGB framebuffers safely, and renders a minimal framebuffer text shell while keeping VGA fallback
+- next planned slice: improve framebuffer font coverage and general visual polish on top of the new baseline
+
 ## Current baseline
 
 Phase 6 is complete and the system now has a stable boot-to-shell workflow:

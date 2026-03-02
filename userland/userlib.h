@@ -102,6 +102,10 @@ static inline int32_t user_task_snapshot(struct syscall_task_snapshot_entry *ent
                          entry_cap);
 }
 
+static inline int32_t user_time_info(struct syscall_time_info *info) {
+    return user_syscall1(SYS_TIME_INFO, (uint32_t)(uintptr_t)info);
+}
+
 static inline void user_yield(void) {
     (void)user_syscall0(SYS_YIELD);
 }

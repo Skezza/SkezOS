@@ -45,10 +45,24 @@ The immediate post-Phase-6 ergonomics slice has now landed on top of this baseli
 - `SYS_SPAWN_EX` still takes a narrow flat-cmdline request, but the kernel launch path now builds a minimal `argc/argv` startup frame for spawned children
 - `/bin/echo.elf` and `/bin/cat.elf` now consume `argc/argv` directly instead of depending on `SYS_GETCMDLINE`
 - `ps` is no longer a stub: `SYS_TASK_SNAPSHOT` returns a bounded task snapshot used by the shell builtin
-- a small `SYS_SLEEP` syscall is now available, and the shell plus `/bin/readln.elf` use it to avoid hot-spinning when stdin is temporarily empty
-- `make qemu-smoke-phase6` now also validates a tiny `/bin/readln.elf` stdin handoff path alongside `ps`, `echo`, `cat`, and unknown-command failure handling
+- owning-task `/dev/console` reads now block in-kernel, so the shell plus `/bin/readln.elf` no longer tick-sleep on empty stdin from userland
+- the shell plus `/bin/readln.elf` now support basic erase-in-place editing for `BS` and serial `DEL`
+- `SYS_TIME_INFO` now returns a stable monotonic tick snapshot plus PIT frequency, and a tiny `/bin/uptime.elf` tool exposes that path from the shell
+- a tiny `/bin/sleep.elf` tool now exercises `SYS_SLEEP` from normal userland and reports requested vs observed elapsed ticks
+- `make qemu-smoke-phase6` now also validates `/bin/readln.elf`, real `ps`, `uptime`, `sleep`, `echo`, `cat`, and unknown-command failure handling
 
 This keeps the shell deliberately narrow while removing the most visible interaction/runtime limitations that remained immediately after Phase 6 proper.
+
+## Current follow-on (2026-02-28)
+
+This shell/runtime baseline is now feeding the next creative milestone:
+
+- `Phase 9 - Framebuffer bring-up and visual shell`
+- the first landed slice is intentionally conservative: the existing shell still runs on the same code path, but VGA text mode now reserves fixed chrome rows at the top of the screen so the system has an immediate visual frame
+- the groundwork under that milestone now also captures the Multiboot framebuffer handoff descriptor, routes console output through a display abstraction, and safely maps a framebuffer window when a direct-RGB surface is provided
+- the current landing now includes a minimal framebuffer-backed text shell with VGA fallback; the next planned slices are font coverage and layout polish
+
+The important constraint has not changed: build a more intentional presentation layer without blowing up the shell ABI or bundling in a window manager before the display substrate exists.
 
 ## Target user-visible outcome
 
@@ -58,6 +72,8 @@ On every boot, the system should reliably reach a simple userspace command loop 
 - launch binaries from `/bin`
 - wait for child completion
 - run basic tools like `echo` and `cat`
+- inspect basic monotonic uptime through `uptime`
+- use a minimal tick-based `sleep` command for testing simple timing behavior
 - hand stdin to a synchronous foreground child when needed
 - inspect a bounded task snapshot through `ps`
 
@@ -88,7 +104,7 @@ Do not add pipes, redirection, or job control in the initial shell.
 
 Minimum shared userspace support should provide:
 
-- stable syscall wrappers for `write`, `read`, `exit`, `spawn`, `spawn_ex`, `getcmdline`, `waitpid`, `open`, `close`, `yield`, `time`, `task_snapshot`
+- stable syscall wrappers for `write`, `read`, `exit`, `spawn`, `spawn_ex`, `getcmdline`, `waitpid`, `open`, `close`, `yield`, `time`, `time_info`, `sleep`, `task_snapshot`
 - string helpers needed by the first shell/tools
 - a small `_start` convention that can support a C-like `main(argc, argv)` entry when needed
 
@@ -133,6 +149,6 @@ Current validation evidence for the interactive slice:
 - `SYS_SPAWN_EX` now inspects fixed-address ET_EXEC images directly and uses a reusable child stack pool, so new `/bin` tools no longer need kernel path-whitelist wiring
 - the shell is intentionally foreground-only and does not implement pipes, redirection, quoting, escaping, or job control
 - shell parsing is still whitespace-only; there is still no quoting or escape handling
-- console reads remain non-blocking, so simple foreground readers still poll once per tick via `SYS_SLEEP` rather than blocking in the kernel
+- the timer path exposed to userspace is still a PIT-backed monotonic tick counter; there is still no RTC or wall-clock/date model
 - the task snapshot exposed to `ps` is intentionally bounded and minimal; there is no `/proc` model or richer introspection interface yet
 - boot shell startup remains fixed-slot and user binaries are still fixed-address ET_EXEC images; this slice does not attempt PIE or relocatable loading

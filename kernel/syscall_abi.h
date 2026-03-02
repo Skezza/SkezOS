@@ -21,6 +21,12 @@ struct syscall_task_snapshot_entry {
     char name[SYSCALL_TASK_NAME_MAX];
 };
 
+struct syscall_time_info {
+    uint32_t ticks_lo;
+    uint32_t ticks_hi;
+    uint32_t hz;
+};
+
 enum {
     SYS_WRITE = 1,
     SYS_YIELD = 2,
@@ -35,6 +41,7 @@ enum {
     SYS_GETCMDLINE = 11, /* Copy the current process cmdline into a user buffer. */
     SYS_TASK_SNAPSHOT = 12, /* Copy out a bounded task snapshot table. */
     SYS_SLEEP = 13, /* Sleep the current task for at least N scheduler ticks. */
+    SYS_TIME_INFO = 14, /* Copy out a monotonic tick snapshot plus timer frequency. */
 };
 
 enum {

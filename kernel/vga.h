@@ -3,7 +3,9 @@
 
 #include <stdint.h>
 
-/* Clear the VGA text buffer and reset the cursor. */
+/* Clear the VGA text buffer, redraw the fixed chrome rows, and reset the
+ * cursor to the first content row.
+ */
 void vga_clear(void);
 
 /* Enter/leave a short single-core console critical section. The return value
@@ -13,7 +15,7 @@ void vga_clear(void);
 uint32_t vga_console_enter_critical(void);
 void vga_console_leave_critical(uint32_t saved_flags);
 
-/* Write a single character to the VGA text buffer at the current
+/* Write a single character to the VGA text buffer at the current content
  * cursor position.  Handles newlines by advancing to the next line.
  */
 void vga_putc(char c);
