@@ -6,6 +6,8 @@
 #include "memory_layout.h"
 #include "memmap.h"
 #include "paging.h"
+#include "pmm.h"
+#include "sched.h"
 #include "timer.h"
 #include "vga.h"
 
@@ -187,6 +189,11 @@ static void display_framebuffer_draw_text_right_packed(uint32_t right_x,
                                                        const char *text,
                                                        uint32_t fg_pixel,
                                                        uint32_t bg_pixel);
+static void display_append_text(char *dst, uint32_t *len, uint32_t cap, const char *text);
+static void display_append_u32(char *dst, uint32_t *len, uint32_t cap, uint32_t value);
+static void display_append_mib_value(char *dst, uint32_t *len, uint32_t cap, uint32_t frame_count);
+static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_t cap);
+static void display_framebuffer_draw_header_metrics(void);
 static uint32_t display_framebuffer_prompt_visible_cols(void);
 static char display_framebuffer_prompt_mode_code(void);
 static void display_framebuffer_build_prompt_status(char status_text[8]);
@@ -336,6 +343,7 @@ static void display_framebuffer_draw_prompt_strip_idle(void) {
     uint32_t separator_x = prompt_text_left - (DISPLAY_FB_CHAR_W / 2U);
 
     display_framebuffer_build_prompt_status(status_text);
+    display_framebuffer_draw_header_metrics();
 
     display_framebuffer_draw_line_gutter(g_display_fb.scroll_rows, DISPLAY_LINE_STYLE_PROMPT);
     display_framebuffer_fill_rect_packed(
@@ -446,6 +454,45 @@ static uint32_t display_string_length(const char *text) {
         len++;
     }
     return len;
+}
+
+static void display_append_text(char *dst, uint32_t *len, uint32_t cap, const char *text) {
+    while (*text != '\0' && *len + 1U < cap) {
+        dst[*len] = *text;
+        (*len)++;
+        text++;
+    }
+    if (cap != 0U) {
+        dst[*len < cap ? *len : (cap - 1U)] = '\0';
+    }
+}
+
+static void display_append_u32(char *dst, uint32_t *len, uint32_t cap, uint32_t value) {
+    char digits[10];
+    uint32_t count = 0U;
+
+    do {
+        digits[count++] = (char)('0' + (value % 10U));
+        value /= 10U;
+    } while (value != 0U);
+
+    while (count > 0U && *len + 1U < cap) {
+        dst[*len] = digits[--count];
+        (*len)++;
+    }
+    if (cap != 0U) {
+        dst[*len < cap ? *len : (cap - 1U)] = '\0';
+    }
+}
+
+static void display_append_mib_value(char *dst, uint32_t *len, uint32_t cap, uint32_t frame_count) {
+    uint32_t mib = frame_count / 256U;
+
+    if (mib == 0U && frame_count != 0U) {
+        mib = 1U;
+    }
+    display_append_u32(dst, len, cap, mib);
+    display_append_text(dst, len, cap, "M");
 }
 
 static uint32_t display_scale_channel(uint8_t value, uint8_t mask_size) {
@@ -569,6 +616,54 @@ static void display_framebuffer_draw_text_right_packed(uint32_t right_x,
         draw_x = right_x - text_width;
     }
     display_framebuffer_draw_text_packed(draw_x, y, text, fg_pixel, bg_pixel);
+}
+
+static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_t cap) {
+    struct pmm_stats pmm_stats;
+    uint32_t len = 0U;
+    uint32_t hz = timer_frequency_hz();
+    uint32_t seconds = 0U;
+
+    if (cap == 0U) {
+        return;
+    }
+    metrics_text[0] = '\0';
+
+    pmm_get_stats(&pmm_stats);
+    if (hz != 0U) {
+        seconds = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL) / hz;
+    }
+
+    display_append_text(metrics_text, &len, cap, "RAM ");
+    display_append_mib_value(metrics_text, &len, cap, pmm_stats.free_frames);
+    display_append_text(metrics_text, &len, cap, "/");
+    display_append_mib_value(metrics_text, &len, cap, pmm_stats.total_frames);
+    display_append_text(metrics_text, &len, cap, "  UP ");
+    display_append_u32(metrics_text, &len, cap, seconds);
+    display_append_text(metrics_text, &len, cap, "s  TASKS ");
+    display_append_u32(metrics_text, &len, cap, sched_runnable_count());
+}
+
+static void display_framebuffer_draw_header_metrics(void) {
+    uint32_t title_bg = display_framebuffer_pack_rgb(17U, 47U, 122U);
+    uint32_t title_fg = display_framebuffer_pack_rgb(252U, 252U, 252U);
+    uint32_t metrics_y = DISPLAY_FB_CHAR_H + 2U;
+    uint32_t metrics_left = 48U * DISPLAY_FB_CHAR_W;
+    uint32_t metrics_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
+    char metrics_text[64];
+
+    if (metrics_left >= metrics_right) {
+        return;
+    }
+
+    display_framebuffer_build_header_metrics(metrics_text, sizeof(metrics_text));
+    display_framebuffer_fill_rect_packed(
+        metrics_left,
+        metrics_y,
+        metrics_right - metrics_left,
+        DISPLAY_FB_CHAR_H,
+        title_bg);
+    display_framebuffer_draw_text_right_packed(metrics_right, metrics_y, metrics_text, title_fg, title_bg);
 }
 
 static void display_framebuffer_scroll_if_needed(void) {
@@ -755,8 +850,8 @@ static void display_framebuffer_draw_shell_frame(void) {
     static const char *logo_lines[] = {
         " ####  #   #  #####  #####   ###   #### ",
         "#      #  #   #         #   #   #  #    ",
-        " ###   ###    ####    #    #   #   ###  ",
-        "    #  #  #   #      #     #   #     # ",
+        " ###   ###    ####    #     #   #  ###  ",
+        "    #  #  #   #      #      #   #     # ",
         "####   #   #  #####  #####   ###   #### ",
     };
     uint32_t res_len = 0U;
@@ -836,6 +931,7 @@ static void display_framebuffer_draw_shell_frame(void) {
             title_fg,
             title_bg);
     }
+    display_framebuffer_draw_header_metrics();
     display_framebuffer_draw_text_packed(
         DISPLAY_FB_CHAR_W, ((DISPLAY_FB_HEADER_ROWS - 1U) * DISPLAY_FB_CHAR_H) + 2U,
         "ASCII LOGO | FRAMEBUFFER CONSOLE | INPUT: KEYBOARD",

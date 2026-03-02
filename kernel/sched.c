@@ -1096,9 +1096,14 @@ static void sched_task_exit(void) {
 }
 
 uint32_t sched_runnable_count(void) {
+    uint32_t eflags;
     uint32_t count;
+
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) :: "memory");
     sched_cli();
     count = sched_count_runnable_locked();
-    sched_sti();
+    if ((eflags & (1U << 9)) != 0U) {
+        sched_sti();
+    }
     return count;
 }
