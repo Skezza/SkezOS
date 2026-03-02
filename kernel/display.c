@@ -934,7 +934,7 @@ static void display_framebuffer_draw_shell_frame(void) {
     display_framebuffer_draw_header_metrics();
     display_framebuffer_draw_text_packed(
         DISPLAY_FB_CHAR_W, ((DISPLAY_FB_HEADER_ROWS - 1U) * DISPLAY_FB_CHAR_H) + 2U,
-        "ASCII LOGO | FRAMEBUFFER CONSOLE | INPUT: KEYBOARD",
+        "FRAMEBUFFER CONSOLE",
         meta_fg, meta_bg);
     display_framebuffer_draw_text_right_packed(
         g_display_fb.info.width - DISPLAY_FB_CHAR_W,
@@ -942,14 +942,6 @@ static void display_framebuffer_draw_shell_frame(void) {
         resolution_text,
         meta_fg,
         meta_bg);
-    display_framebuffer_draw_text_packed(
-        DISPLAY_FB_CHAR_W, footer_top + 2U,
-        "SPLIT VIEW: OUTPUT ABOVE | PROMPT LANE BELOW",
-        footer_fg, footer_bg);
-    display_framebuffer_draw_text_right_packed(
-        g_display_fb.info.width - DISPLAY_FB_CHAR_W, footer_top + 2U,
-        "VGA FALLBACK READY",
-        footer_fg, footer_bg);
 }
 
 void display_init(void) {
