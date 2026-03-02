@@ -29,6 +29,10 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 
 <img width="1124" height="858" alt="Screenshot from 2026-02-13 00-15-09" src="https://github.com/user-attachments/assets/a12490a1-f83a-4b03-827b-6973b0909c65" />
 
+Framebuffer!
+<img width="1052" height="863" alt="image" src="https://github.com/user-attachments/assets/8cdc7ca0-920d-4bfc-9417-a816c3d765af" />
+
+
 ### Keep tinkering
 
 It’s intentionally minimal. The current shell is still bootstrap-grade: whitespace parsing only, foreground-only execution, real `argc/argv` startup for spawned tools, foreground stdin handoff only for synchronous children, a bounded kernel-backed `ps` snapshot, basic backspace erase/editing, and monotonic `uptime`/`sleep` commands backed by `SYS_TIME_INFO` plus the existing tick scheduler. Owning-task `/dev/console` reads now block in-kernel, so shell tools no longer retry on empty stdin from userland. The display work has moved past scaffolding: the active console path runs through a thin display abstraction, the kernel can map a higher-half framebuffer window safely, and the default boot path now uses a minimal framebuffer text shell when a direct-RGB pixel surface is available while keeping styled VGA fallback. The framebuffer shell now has a framed content panel, stronger chrome, distinct lowercase rendering, lightweight color-coding for prompts plus common `user:` / `elf-` lines, a scrolling left gutter rail that reinforces those line types, and a fixed prompt lane below the scrolling transcript that now reads like a labeled input strip with a bounded entry runway, a compact live mode-plus-seconds badge (`R`/`E`/`C` + elapsed monotonic seconds), and trailing-window prompt clipping. The current font is still a bootstrap font, but it now rasterizes onto a denser 5x7 grid instead of the earlier coarse 3x5 presentation, so it reads materially better while a larger replacement font remains future work. It still has no quoting, pipes, redirection, or background jobs. Add a better shell, disk drivers, a filesystem, or whatever keeps you wired.
