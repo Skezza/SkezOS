@@ -10,15 +10,16 @@ static char g_shell_line[SHELL_LINE_MAX];
 static char g_shell_path[SHELL_PATH_MAX];
 static struct syscall_task_snapshot_entry g_shell_ps_tasks[SHELL_PS_MAX_TASKS];
 
-static const char kBanner[] = "sh: bootstrap shell online\n";
+static const char kBanner[] = "SkezOS shell ready\nType 'help' for commands.\n";
 static const char kPrompt[] = "sh> ";
 static const char kHelp[] =
-    "sh: builtins help wait ps exit; external names map to /bin/<name>.elf\n";
-static const char kWaitStub[] = "sh: no background jobs in bootstrap shell\n";
-static const char kPsFail[] = "sh: ps failed\n";
-static const char kSpawnFail[] = "sh: command failed\n";
-static const char kWaitFail[] = "sh: waitpid failed\n";
-static const char kExit[] = "sh: bootstrap shell exit\n";
+    "builtins: help ps wait exit\n"
+    "run: <name> -> /bin/<name>.elf\n";
+static const char kWaitStub[] = "wait: no background jobs\n";
+static const char kPsFail[] = "ps: snapshot failed\n";
+static const char kSpawnFail[] = "run: launch failed\n";
+static const char kWaitFail[] = "run: waitpid failed\n";
+static const char kExit[] = "sh: exit\n";
 static const char kNewline[] = "\n";
 static const char kEraseOne[] = "\b \b";
 
@@ -41,61 +42,98 @@ static void shell_write_char(char ch) {
     shell_write_all(&ch, 1U);
 }
 
+static void shell_write_spaces(uint32_t count) {
+    while (count > 0U) {
+        shell_write_char(' ');
+        count--;
+    }
+}
+
 static void shell_erase_one_char(void) {
     shell_write_all(kEraseOne, (uint32_t)(sizeof(kEraseOne) - 1U));
 }
 
-static void shell_write_u32(uint32_t value) {
-    char buf[10];
+static uint32_t shell_format_u32(char *buf, uint32_t cap, uint32_t value) {
+    char digits[10];
     uint32_t len = 0;
+    uint32_t out_len = 0;
 
+    if (!buf || cap == 0U) {
+        return 0U;
+    }
     if (value == 0U) {
-        shell_write_char('0');
-        return;
+        if (cap < 2U) {
+            buf[0] = '\0';
+            return 0U;
+        }
+        buf[0] = '0';
+        buf[1] = '\0';
+        return 1U;
     }
 
-    while (value != 0U && len < sizeof(buf)) {
-        buf[len++] = (char)('0' + (value % 10U));
+    while (value != 0U && len < sizeof(digits)) {
+        digits[len++] = (char)('0' + (value % 10U));
         value /= 10U;
     }
-    while (len > 0U) {
-        shell_write_char(buf[--len]);
+    while (len > 0U && out_len + 1U < cap) {
+        buf[out_len++] = digits[--len];
     }
+    buf[out_len] = '\0';
+    return out_len;
 }
 
-static void shell_write_i32(int32_t value) {
+static uint32_t shell_format_i32(char *buf, uint32_t cap, int32_t value) {
     uint32_t magnitude;
 
-    if (value < 0) {
-        shell_write_char('-');
-        magnitude = (uint32_t)(-(value + 1)) + 1U;
-    } else {
-        magnitude = (uint32_t)value;
+    if (!buf || cap == 0U) {
+        return 0U;
     }
-    shell_write_u32(magnitude);
+    if (value < 0) {
+        if (cap < 2U) {
+            buf[0] = '\0';
+            return 0U;
+        }
+        buf[0] = '-';
+        magnitude = (uint32_t)(-(value + 1)) + 1U;
+        return 1U + shell_format_u32(buf + 1, cap - 1U, magnitude);
+    }
+    return shell_format_u32(buf, cap, (uint32_t)value);
 }
 
-static void shell_write_task_state(uint32_t state) {
+static void shell_write_padded(const char *text, uint32_t width) {
+    uint32_t len = 0U;
+
+    if (text) {
+        len = user_strlen(text);
+        shell_write_all(text, len);
+    }
+    if (width > len) {
+        shell_write_spaces(width - len);
+    }
+}
+
+static const char *shell_task_state_name(uint32_t state) {
     switch (state) {
         case SYSCALL_TASK_STATE_RUNNABLE:
-            shell_write_str("runnable");
-            return;
+            return "ready";
         case SYSCALL_TASK_STATE_RUNNING:
-            shell_write_str("running");
-            return;
+            return "run";
         case SYSCALL_TASK_STATE_SLEEPING:
-            shell_write_str("sleep");
-            return;
+            return "sleep";
         case SYSCALL_TASK_STATE_WAIT_CHILD:
-            shell_write_str("wait-child");
-            return;
+            return "wait";
         case SYSCALL_TASK_STATE_ZOMBIE:
-            shell_write_str("zombie");
-            return;
+            return "zombie";
         default:
-            shell_write_str("unknown");
-            return;
+            return "unknown";
     }
+}
+
+static const char *shell_task_mode_name(uint32_t flags) {
+    if ((flags & SYSCALL_TASK_FLAG_USER) != 0U) {
+        return "user";
+    }
+    return "kern";
 }
 
 static void shell_run_ps(void) {
@@ -106,32 +144,34 @@ static void shell_run_ps(void) {
         return;
     }
 
+    shell_write_padded("PID", 5U);
+    shell_write_padded("PPID", 6U);
+    shell_write_padded("MODE", 6U);
+    shell_write_padded("STATE", 8U);
+    shell_write_padded("EXIT", 6U);
+    shell_write_str("NAME\n");
+
     for (uint32_t i = 0; i < (uint32_t)count; i++) {
         const struct syscall_task_snapshot_entry *entry = &g_shell_ps_tasks[i];
+        char num_buf[12];
+        char exit_buf[12];
+        const char *exit_text = "-";
 
-        shell_write_str("ps: pid=");
-        shell_write_i32(entry->pid);
-        shell_write_str(" ppid=");
-        shell_write_i32(entry->parent_pid);
-        shell_write_str(" state=");
-        shell_write_task_state(entry->state);
-        shell_write_str(" mode=");
-        if ((entry->flags & SYSCALL_TASK_FLAG_USER) != 0U) {
-            shell_write_str("user");
-        } else {
-            shell_write_str("kernel");
-        }
-        shell_write_str(" exit=");
+        shell_format_i32(num_buf, sizeof(num_buf), entry->pid);
+        shell_write_padded(num_buf, 5U);
+        shell_format_i32(num_buf, sizeof(num_buf), entry->parent_pid);
+        shell_write_padded(num_buf, 6U);
+        shell_write_padded(shell_task_mode_name(entry->flags), 6U);
+        shell_write_padded(shell_task_state_name(entry->state), 8U);
         if ((entry->flags & SYSCALL_TASK_FLAG_EXIT_VALID) != 0U) {
-            shell_write_i32(entry->exit_code);
-        } else {
-            shell_write_char('-');
+            shell_format_i32(exit_buf, sizeof(exit_buf), entry->exit_code);
+            exit_text = exit_buf;
         }
-        shell_write_str(" name=");
+        shell_write_padded(exit_text, 6U);
         if (entry->name[0] != '\0') {
             shell_write_str(entry->name);
         } else {
-            shell_write_char('?');
+            shell_write_str("?");
         }
         shell_write_str(kNewline);
     }
@@ -165,11 +205,17 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
         if (ch == '\r') {
             ch = '\n';
         }
+        if (ch == '\t') {
+            ch = ' ';
+        }
         if (ch == '\b' || ch == 0x7f) {
             if (len > 0U) {
                 len--;
                 shell_erase_one_char();
             }
+            continue;
+        }
+        if ((uint32_t)ch < 0x20U && ch != '\n') {
             continue;
         }
         if (ch == '\n') {

@@ -160,17 +160,17 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
 #define DISPLAY_FB_GLYPH_SCALE_Y 2U
 #define DISPLAY_FB_GLYPH_X_PAD 2U
 #define DISPLAY_FB_GLYPH_Y_PAD 2U
-#define DISPLAY_FB_HEADER_ROWS 6U
-#define DISPLAY_FB_FOOTER_ROWS 1U
-#define DISPLAY_FB_PANEL_MARGIN_X 32U
-#define DISPLAY_FB_PANEL_MARGIN_Y 8U
-#define DISPLAY_FB_PANEL_BORDER 2U
-#define DISPLAY_FB_LINE_GUTTER_WIDTH 6U
-#define DISPLAY_FB_LINE_GUTTER_GAP 6U
+#define DISPLAY_FB_HEADER_ROWS 2U
+#define DISPLAY_FB_FOOTER_ROWS 0U
+#define DISPLAY_FB_PANEL_MARGIN_X 16U
+#define DISPLAY_FB_PANEL_MARGIN_Y 4U
+#define DISPLAY_FB_PANEL_BORDER 1U
+#define DISPLAY_FB_LINE_GUTTER_WIDTH 4U
+#define DISPLAY_FB_LINE_GUTTER_GAP 4U
 #define DISPLAY_FB_LINE_GUTTER_TOTAL \
     (DISPLAY_FB_LINE_GUTTER_WIDTH + DISPLAY_FB_LINE_GUTTER_GAP)
-#define DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS 8U
-#define DISPLAY_FB_PROMPT_STATUS_RESERVE_COLS 7U
+#define DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS 5U
+#define DISPLAY_FB_PROMPT_STATUS_RESERVE_COLS 0U
 
 static uint32_t display_framebuffer_pack_rgb(uint8_t r, uint8_t g, uint8_t b);
 static void display_framebuffer_fill_rect_packed(uint32_t x, uint32_t y,
@@ -198,19 +198,12 @@ static void display_framebuffer_draw_text_packed(uint32_t x, uint32_t y,
                                                  const char *text,
                                                  uint32_t fg_pixel,
                                                  uint32_t bg_pixel);
-static void display_framebuffer_draw_text_right_packed(uint32_t right_x,
-                                                       uint32_t y,
-                                                       const char *text,
-                                                       uint32_t fg_pixel,
-                                                       uint32_t bg_pixel);
 static void display_append_text(char *dst, uint32_t *len, uint32_t cap, const char *text);
 static void display_append_u32(char *dst, uint32_t *len, uint32_t cap, uint32_t value);
 static void display_append_mib_value(char *dst, uint32_t *len, uint32_t cap, uint32_t frame_count);
 static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_t cap);
 static void display_framebuffer_draw_header_metrics(void);
 static uint32_t display_framebuffer_prompt_visible_cols(void);
-static char display_framebuffer_prompt_mode_code(void);
-static void display_framebuffer_build_prompt_status(char status_text[8]);
 
 static void display_framebuffer_line_colors(display_line_style_t style,
                                             uint32_t *fg_pixel,
@@ -303,39 +296,6 @@ static uint32_t display_framebuffer_prompt_visible_cols(void) {
            DISPLAY_FB_PROMPT_STATUS_RESERVE_COLS;
 }
 
-static char display_framebuffer_prompt_mode_code(void) {
-    if (g_display_fb.line_style == DISPLAY_LINE_STYLE_PROMPT) {
-        if (g_display_fb.line_len > display_framebuffer_prompt_visible_cols()) {
-            return 'C';
-        }
-        if (g_display_fb.line_len > 3U) {
-            return 'E';
-        }
-    }
-    return 'R';
-}
-
-static void display_framebuffer_build_prompt_status(char status_text[8]) {
-    uint32_t seconds = 0U;
-    uint32_t hz = timer_frequency_hz();
-    uint32_t seconds_mod;
-    char mode_code = display_framebuffer_prompt_mode_code();
-
-    if (hz != 0U) {
-        seconds = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL) / hz;
-    }
-    seconds_mod = seconds % 10000U;
-
-    status_text[0] = mode_code;
-    status_text[1] = ':';
-    status_text[2] = (char)('0' + ((seconds_mod / 1000U) % 10U));
-    status_text[3] = (char)('0' + ((seconds_mod / 100U) % 10U));
-    status_text[4] = (char)('0' + ((seconds_mod / 10U) % 10U));
-    status_text[5] = (char)('0' + (seconds_mod % 10U));
-    status_text[6] = 's';
-    status_text[7] = '\0';
-}
-
 static void display_framebuffer_clear_scroll_row(uint32_t row) {
     display_framebuffer_draw_line_gutter(row, DISPLAY_LINE_STYLE_NORMAL);
     display_framebuffer_fill_rect_packed(
@@ -348,15 +308,13 @@ static void display_framebuffer_clear_scroll_row(uint32_t row) {
 
 static void display_framebuffer_draw_prompt_strip_idle(void) {
     uint32_t prompt_top = g_display_fb.content_top_px + (g_display_fb.scroll_rows * DISPLAY_FB_CHAR_H);
-    uint32_t prompt_fg = display_framebuffer_pack_rgb(196U, 246U, 198U);
-    uint32_t prompt_bg = display_framebuffer_pack_rgb(4U, 20U, 10U);
-    char status_text[8];
+    uint32_t prompt_fg = display_framebuffer_pack_rgb(212U, 246U, 214U);
+    uint32_t prompt_bg = display_framebuffer_pack_rgb(6U, 26U, 14U);
     uint32_t prompt_text_left =
         g_display_fb.content_left_px + (DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS * DISPLAY_FB_CHAR_W);
     uint32_t prompt_text_width = display_framebuffer_prompt_visible_cols() * DISPLAY_FB_CHAR_W;
     uint32_t separator_x = prompt_text_left - (DISPLAY_FB_CHAR_W / 2U);
 
-    display_framebuffer_build_prompt_status(status_text);
     display_framebuffer_draw_header_metrics();
 
     display_framebuffer_draw_line_gutter(g_display_fb.scroll_rows, DISPLAY_LINE_STYLE_PROMPT);
@@ -371,23 +329,17 @@ static void display_framebuffer_draw_prompt_strip_idle(void) {
         prompt_top,
         prompt_text_width,
         DISPLAY_FB_CHAR_H,
-        display_framebuffer_pack_rgb(2U, 14U, 8U));
+        display_framebuffer_pack_rgb(3U, 18U, 10U));
     display_framebuffer_fill_rect_packed(
         separator_x,
         prompt_top + 2U,
         2U,
         DISPLAY_FB_CHAR_H - 4U,
-        display_framebuffer_pack_rgb(74U, 126U, 86U));
+        display_framebuffer_pack_rgb(64U, 112U, 76U));
     display_framebuffer_draw_text_packed(
         g_display_fb.content_left_px + DISPLAY_FB_CHAR_W,
         prompt_top + 2U,
-        "INPUT",
-        prompt_fg,
-        prompt_bg);
-    display_framebuffer_draw_text_right_packed(
-        g_display_fb.content_left_px + g_display_fb.content_width_px - DISPLAY_FB_CHAR_W,
-        prompt_top + 2U,
-        status_text,
+        "CMD",
         prompt_fg,
         prompt_bg);
 }
@@ -673,19 +625,6 @@ static void display_framebuffer_draw_text_packed(uint32_t x, uint32_t y,
     }
 }
 
-static void display_framebuffer_draw_text_right_packed(uint32_t right_x,
-                                                       uint32_t y,
-                                                       const char *text,
-                                                       uint32_t fg_pixel,
-                                                       uint32_t bg_pixel) {
-    uint32_t text_width = display_string_length(text) * DISPLAY_FB_CHAR_W;
-    uint32_t draw_x = 0U;
-
-    if (right_x > text_width) {
-        draw_x = right_x - text_width;
-    }
-    display_framebuffer_draw_text_packed(draw_x, y, text, fg_pixel, bg_pixel);
-}
 
 static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_t cap) {
     struct pmm_stats pmm_stats;
@@ -703,22 +642,20 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
         seconds = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL) / hz;
     }
 
-    display_append_text(metrics_text, &len, cap, "RAM ");
+    display_append_text(metrics_text, &len, cap, "UP ");
+    display_append_u32(metrics_text, &len, cap, seconds);
+    display_append_text(metrics_text, &len, cap, "s  RAM ");
     display_append_mib_value(metrics_text, &len, cap, pmm_stats.free_frames);
     display_append_text(metrics_text, &len, cap, "/");
     display_append_mib_value(metrics_text, &len, cap, pmm_stats.total_frames);
-    display_append_text(metrics_text, &len, cap, "  UP ");
-    display_append_u32(metrics_text, &len, cap, seconds);
-    display_append_text(metrics_text, &len, cap, "s  TASKS ");
-    display_append_u32(metrics_text, &len, cap, sched_runnable_count());
 }
 
 static void display_framebuffer_draw_header_metrics(void) {
-    uint32_t title_bg = display_framebuffer_pack_rgb(17U, 47U, 122U);
-    uint32_t title_fg = display_framebuffer_pack_rgb(252U, 252U, 252U);
-    uint32_t title_shadow = display_framebuffer_pack_rgb(3U, 13U, 32U);
+    uint32_t metrics_bg = display_framebuffer_pack_rgb(10U, 16U, 28U);
+    uint32_t metrics_fg = display_framebuffer_pack_rgb(229U, 236U, 246U);
+    uint32_t metrics_shadow = display_framebuffer_pack_rgb(0U, 4U, 12U);
     uint32_t metrics_y = DISPLAY_FB_CHAR_H + 2U;
-    uint32_t metrics_left = 48U * DISPLAY_FB_CHAR_W;
+    uint32_t metrics_left = 12U * DISPLAY_FB_CHAR_W;
     uint32_t metrics_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
     char metrics_text[64];
 
@@ -732,14 +669,14 @@ static void display_framebuffer_draw_header_metrics(void) {
         metrics_y,
         metrics_right - metrics_left,
         DISPLAY_FB_CHAR_H,
-        title_bg);
+        metrics_bg);
     display_framebuffer_draw_text_right_emphasized_packed(
         metrics_right,
         metrics_y,
         metrics_text,
-        title_fg,
-        title_bg,
-        title_shadow);
+        metrics_fg,
+        metrics_bg,
+        metrics_shadow);
 }
 
 static void display_framebuffer_scroll_if_needed(void) {
@@ -904,17 +841,16 @@ static void display_framebuffer_putc(char c) {
 }
 
 static void display_framebuffer_draw_shell_frame(void) {
-    uint32_t back_bg = display_framebuffer_pack_rgb(7U, 10U, 18U);
-    uint32_t title_bg = display_framebuffer_pack_rgb(17U, 47U, 122U);
+    uint32_t back_bg = display_framebuffer_pack_rgb(5U, 8U, 14U);
+    uint32_t title_bg = display_framebuffer_pack_rgb(14U, 32U, 74U);
     uint32_t title_fg = display_framebuffer_pack_rgb(252U, 252U, 252U);
     uint32_t title_shadow = display_framebuffer_pack_rgb(3U, 13U, 32U);
-    uint32_t meta_bg = display_framebuffer_pack_rgb(13U, 22U, 44U);
+    uint32_t meta_bg = display_framebuffer_pack_rgb(10U, 16U, 28U);
     uint32_t meta_fg = display_framebuffer_pack_rgb(189U, 201U, 219U);
     uint32_t meta_shadow = display_framebuffer_pack_rgb(0U, 4U, 12U);
-    uint32_t accent = display_framebuffer_pack_rgb(252U, 175U, 69U);
-    uint32_t panel_border = display_framebuffer_pack_rgb(45U, 63U, 92U);
+    uint32_t accent = display_framebuffer_pack_rgb(245U, 170U, 72U);
+    uint32_t panel_border = display_framebuffer_pack_rgb(32U, 46U, 68U);
     uint32_t panel_bg = display_framebuffer_pack_rgb(0U, 0U, 0U);
-    uint32_t footer_bg = display_framebuffer_pack_rgb(11U, 18U, 32U);
     uint32_t panel_left =
         g_display_fb.content_left_px - DISPLAY_FB_PANEL_BORDER - DISPLAY_FB_LINE_GUTTER_TOTAL;
     uint32_t panel_top = g_display_fb.content_top_px - DISPLAY_FB_PANEL_BORDER;
@@ -922,18 +858,6 @@ static void display_framebuffer_draw_shell_frame(void) {
         g_display_fb.content_width_px + (DISPLAY_FB_PANEL_BORDER * 2U) + DISPLAY_FB_LINE_GUTTER_TOTAL;
     uint32_t panel_height =
         (g_display_fb.content_bottom_px - g_display_fb.content_top_px) + (DISPLAY_FB_PANEL_BORDER * 2U);
-    uint32_t footer_top = g_display_fb.info.height - (DISPLAY_FB_FOOTER_ROWS * DISPLAY_FB_CHAR_H);
-    char resolution_text[32];
-    static const char *logo_lines[] = {
-        " ####  #   #  #####  #####   ###   #### ",
-        "#      #  #   #         #   #   #  #    ",
-        " ###   ###    ####    #     #   #  ###  ",
-        "    #  #  #   #      #      #   #     # ",
-        "####   #   #  #####  #####   ###   #### ",
-    };
-    uint32_t res_len = 0U;
-    uint32_t width_value = g_display_fb.info.width;
-    uint32_t height_value = g_display_fb.info.height;
 
     display_framebuffer_fill_rect_packed(0U, 0U, g_display_fb.info.width, g_display_fb.info.height, back_bg);
     display_framebuffer_fill_rect_packed(
@@ -946,8 +870,15 @@ static void display_framebuffer_draw_shell_frame(void) {
         meta_bg);
     display_framebuffer_fill_rect_packed(
         0U, (DISPLAY_FB_CHAR_H * DISPLAY_FB_HEADER_ROWS) - 2U, g_display_fb.info.width, 2U, accent);
-    display_framebuffer_fill_rect_packed(0U, footer_top, g_display_fb.info.width, DISPLAY_FB_CHAR_H, footer_bg);
     display_framebuffer_fill_rect_packed(panel_left, panel_top, panel_width, panel_height, panel_border);
+#if DISPLAY_FB_FOOTER_ROWS > 0
+    display_framebuffer_fill_rect_packed(
+        0U,
+        g_display_fb.info.height - (DISPLAY_FB_FOOTER_ROWS * DISPLAY_FB_CHAR_H),
+        g_display_fb.info.width,
+        DISPLAY_FB_CHAR_H,
+        display_framebuffer_pack_rgb(11U, 18U, 32U));
+#endif
     display_framebuffer_fill_rect_packed(
         g_display_fb.content_left_px - DISPLAY_FB_LINE_GUTTER_TOTAL,
         g_display_fb.content_top_px,
@@ -967,60 +898,19 @@ static void display_framebuffer_draw_shell_frame(void) {
         g_display_fb.content_bottom_px - g_display_fb.content_top_px,
         display_framebuffer_pack_rgb(52U, 64U, 82U));
     display_framebuffer_draw_prompt_strip_idle();
-
-    resolution_text[res_len++] = 'F';
-    resolution_text[res_len++] = 'B';
-    resolution_text[res_len++] = ':';
-    do {
-        char digits[10];
-        uint32_t count = 0U;
-        uint32_t value = width_value;
-
-        do {
-            digits[count++] = (char)('0' + (value % 10U));
-            value /= 10U;
-        } while (value != 0U);
-        while (count > 0U) {
-            resolution_text[res_len++] = digits[--count];
-        }
-    } while (0);
-    resolution_text[res_len++] = 'X';
-    do {
-        char digits[10];
-        uint32_t count = 0U;
-        uint32_t value = height_value;
-
-        do {
-            digits[count++] = (char)('0' + (value % 10U));
-            value /= 10U;
-        } while (value != 0U);
-        while (count > 0U) {
-            resolution_text[res_len++] = digits[--count];
-        }
-    } while (0);
-    resolution_text[res_len] = '\0';
-
-    for (uint32_t i = 0; i < sizeof(logo_lines) / sizeof(logo_lines[0]); i++) {
-        display_framebuffer_draw_text_emphasized_packed(
-            DISPLAY_FB_CHAR_W,
-            (i * DISPLAY_FB_CHAR_H) + 2U,
-            logo_lines[i],
-            title_fg,
-            title_bg,
-            title_shadow);
-    }
+    display_framebuffer_draw_text_emphasized_packed(
+        DISPLAY_FB_CHAR_W,
+        2U,
+        "SKEZOS",
+        title_fg,
+        title_bg,
+        title_shadow);
     display_framebuffer_draw_header_metrics();
     display_framebuffer_draw_text_emphasized_packed(
-        DISPLAY_FB_CHAR_W, ((DISPLAY_FB_HEADER_ROWS - 1U) * DISPLAY_FB_CHAR_H) + 2U,
-        "FRAMEBUFFER CONSOLE",
-        meta_fg, meta_bg, meta_shadow);
-    display_framebuffer_draw_text_right_emphasized_packed(
-        g_display_fb.info.width - DISPLAY_FB_CHAR_W,
+        DISPLAY_FB_CHAR_W,
         ((DISPLAY_FB_HEADER_ROWS - 1U) * DISPLAY_FB_CHAR_H) + 2U,
-        resolution_text,
-        meta_fg,
-        meta_bg,
-        meta_shadow);
+        "SHELL",
+        meta_fg, meta_bg, meta_shadow);
 }
 
 void display_init(void) {

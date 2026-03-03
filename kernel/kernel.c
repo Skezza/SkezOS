@@ -22,6 +22,7 @@
 #include "keyboard.h"
 
 #define LOG_BOOT_SERIAL 0
+#define BOOT_SPAWN_DEMO_TASKS 0
 #define SMOKE_READY_MARKER "SKEZOS_SMOKE_READY\n"
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36D76289U
 
@@ -211,18 +212,23 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     timer_init(100);
     keyboard_init();
 
-    // Initialize the kernel scheduler and create a few demo tasks.
-    // The scheduler enables interrupts when the first task starts.
+    // Initialize the kernel scheduler. The scheduler enables interrupts
+    // when the first task starts.
     sched_init();
     KASSERT(sched_spawn_kernel_task("console", console_task, 0, 0) == 0);
+    KASSERT(usermode_spawn_shell_task() == 0);
+
+#if BOOT_SPAWN_DEMO_TASKS
     KASSERT(sched_spawn_kernel_task("worker-a", demo_worker_task, (void *)&g_demo_task_a, 0) == 0);
     KASSERT(sched_spawn_kernel_task("worker-b", demo_worker_task, (void *)&g_demo_task_b, 0) == 0);
     KASSERT(usermode_spawn_demo_task() == 0);
     KASSERT(usermode_spawn_fault_task() == 0);
     KASSERT(usermode_spawn_elf_demo_task_a() == 0);
     KASSERT(usermode_spawn_elf_demo_task_b() == 0);
-    KASSERT(usermode_spawn_shell_task() == 0);
     KLOGI("sched: demo tasks created (idle + console + 2 workers + user-demo + user-fault + 2 user-elf + shell)");
+#else
+    KLOGI("sched: boot tasks created (idle + console + shell)");
+#endif
 
     #if LOG_BOOT_SERIAL
     serial_writestr("kernel initialised\n");
