@@ -176,10 +176,24 @@ static uint32_t display_framebuffer_pack_rgb(uint8_t r, uint8_t g, uint8_t b);
 static void display_framebuffer_fill_rect_packed(uint32_t x, uint32_t y,
                                                  uint32_t width, uint32_t height,
                                                  uint32_t pixel);
+static void display_framebuffer_draw_glyph_mask_packed(uint32_t x, uint32_t y,
+                                                       char c,
+                                                       uint32_t pixel);
 static void display_framebuffer_draw_glyph_packed(uint32_t x, uint32_t y,
                                                   char c,
                                                   uint32_t fg_pixel,
                                                   uint32_t bg_pixel);
+static void display_framebuffer_draw_text_emphasized_packed(uint32_t x, uint32_t y,
+                                                            const char *text,
+                                                            uint32_t fg_pixel,
+                                                            uint32_t bg_pixel,
+                                                            uint32_t shadow_pixel);
+static void display_framebuffer_draw_text_right_emphasized_packed(uint32_t right_x,
+                                                                  uint32_t y,
+                                                                  const char *text,
+                                                                  uint32_t fg_pixel,
+                                                                  uint32_t bg_pixel,
+                                                                  uint32_t shadow_pixel);
 static void display_framebuffer_draw_text_packed(uint32_t x, uint32_t y,
                                                  const char *text,
                                                  uint32_t fg_pixel,
@@ -569,26 +583,81 @@ static void display_framebuffer_fill_rect_packed(uint32_t x, uint32_t y,
     }
 }
 
-static void display_framebuffer_draw_glyph_packed(uint32_t x, uint32_t y,
-                                                  char c,
-                                                  uint32_t fg_pixel,
-                                                  uint32_t bg_pixel) {
+static void display_framebuffer_draw_glyph_mask_packed(uint32_t x, uint32_t y,
+                                                       char c,
+                                                       uint32_t pixel) {
     const uint8_t *rows = display_lookup_glyph(c);
 
-    display_framebuffer_fill_rect_packed(x, y, DISPLAY_FB_CHAR_W, DISPLAY_FB_CHAR_H, bg_pixel);
     for (uint32_t row = 0; row < DISPLAY_FB_GLYPH_H; row++) {
         for (uint32_t col = 0; col < DISPLAY_FB_GLYPH_W; col++) {
             if (!display_framebuffer_bootstrap_font_pixel_on(rows, row, col)) {
                 continue;
             }
             display_framebuffer_fill_rect_packed(
-                x + DISPLAY_FB_GLYPH_X_PAD + (col * DISPLAY_FB_GLYPH_SCALE_X),
-                y + DISPLAY_FB_GLYPH_Y_PAD + (row * DISPLAY_FB_GLYPH_SCALE_Y),
+                x + (col * DISPLAY_FB_GLYPH_SCALE_X),
+                y + (row * DISPLAY_FB_GLYPH_SCALE_Y),
                 DISPLAY_FB_GLYPH_SCALE_X,
                 DISPLAY_FB_GLYPH_SCALE_Y,
-                fg_pixel);
+                pixel);
         }
     }
+}
+
+static void display_framebuffer_draw_glyph_packed(uint32_t x, uint32_t y,
+                                                  char c,
+                                                  uint32_t fg_pixel,
+                                                  uint32_t bg_pixel) {
+    display_framebuffer_fill_rect_packed(x, y, DISPLAY_FB_CHAR_W, DISPLAY_FB_CHAR_H, bg_pixel);
+    display_framebuffer_draw_glyph_mask_packed(
+        x + DISPLAY_FB_GLYPH_X_PAD,
+        y + DISPLAY_FB_GLYPH_Y_PAD,
+        c,
+        fg_pixel);
+}
+
+static void display_framebuffer_draw_text_emphasized_packed(uint32_t x, uint32_t y,
+                                                            const char *text,
+                                                            uint32_t fg_pixel,
+                                                            uint32_t bg_pixel,
+                                                            uint32_t shadow_pixel) {
+    uint32_t cursor_x = x;
+
+    while (*text != '\0') {
+        display_framebuffer_fill_rect_packed(cursor_x, y, DISPLAY_FB_CHAR_W, DISPLAY_FB_CHAR_H, bg_pixel);
+        display_framebuffer_draw_glyph_mask_packed(
+            cursor_x + DISPLAY_FB_GLYPH_X_PAD + 1U,
+            y + DISPLAY_FB_GLYPH_Y_PAD + 1U,
+            *text,
+            shadow_pixel);
+        display_framebuffer_draw_glyph_mask_packed(
+            cursor_x + DISPLAY_FB_GLYPH_X_PAD,
+            y + DISPLAY_FB_GLYPH_Y_PAD,
+            *text,
+            fg_pixel);
+        cursor_x += DISPLAY_FB_CHAR_W;
+        text++;
+    }
+}
+
+static void display_framebuffer_draw_text_right_emphasized_packed(uint32_t right_x,
+                                                                  uint32_t y,
+                                                                  const char *text,
+                                                                  uint32_t fg_pixel,
+                                                                  uint32_t bg_pixel,
+                                                                  uint32_t shadow_pixel) {
+    uint32_t text_width = display_string_length(text) * DISPLAY_FB_CHAR_W;
+    uint32_t draw_x = 0U;
+
+    if (right_x > text_width) {
+        draw_x = right_x - text_width;
+    }
+    display_framebuffer_draw_text_emphasized_packed(
+        draw_x,
+        y,
+        text,
+        fg_pixel,
+        bg_pixel,
+        shadow_pixel);
 }
 
 static void display_framebuffer_draw_text_packed(uint32_t x, uint32_t y,
@@ -647,6 +716,7 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
 static void display_framebuffer_draw_header_metrics(void) {
     uint32_t title_bg = display_framebuffer_pack_rgb(17U, 47U, 122U);
     uint32_t title_fg = display_framebuffer_pack_rgb(252U, 252U, 252U);
+    uint32_t title_shadow = display_framebuffer_pack_rgb(3U, 13U, 32U);
     uint32_t metrics_y = DISPLAY_FB_CHAR_H + 2U;
     uint32_t metrics_left = 48U * DISPLAY_FB_CHAR_W;
     uint32_t metrics_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
@@ -663,7 +733,13 @@ static void display_framebuffer_draw_header_metrics(void) {
         metrics_right - metrics_left,
         DISPLAY_FB_CHAR_H,
         title_bg);
-    display_framebuffer_draw_text_right_packed(metrics_right, metrics_y, metrics_text, title_fg, title_bg);
+    display_framebuffer_draw_text_right_emphasized_packed(
+        metrics_right,
+        metrics_y,
+        metrics_text,
+        title_fg,
+        title_bg,
+        title_shadow);
 }
 
 static void display_framebuffer_scroll_if_needed(void) {
@@ -831,13 +907,14 @@ static void display_framebuffer_draw_shell_frame(void) {
     uint32_t back_bg = display_framebuffer_pack_rgb(7U, 10U, 18U);
     uint32_t title_bg = display_framebuffer_pack_rgb(17U, 47U, 122U);
     uint32_t title_fg = display_framebuffer_pack_rgb(252U, 252U, 252U);
+    uint32_t title_shadow = display_framebuffer_pack_rgb(3U, 13U, 32U);
     uint32_t meta_bg = display_framebuffer_pack_rgb(13U, 22U, 44U);
     uint32_t meta_fg = display_framebuffer_pack_rgb(189U, 201U, 219U);
+    uint32_t meta_shadow = display_framebuffer_pack_rgb(0U, 4U, 12U);
     uint32_t accent = display_framebuffer_pack_rgb(252U, 175U, 69U);
     uint32_t panel_border = display_framebuffer_pack_rgb(45U, 63U, 92U);
     uint32_t panel_bg = display_framebuffer_pack_rgb(0U, 0U, 0U);
     uint32_t footer_bg = display_framebuffer_pack_rgb(11U, 18U, 32U);
-    uint32_t footer_fg = display_framebuffer_pack_rgb(168U, 184U, 204U);
     uint32_t panel_left =
         g_display_fb.content_left_px - DISPLAY_FB_PANEL_BORDER - DISPLAY_FB_LINE_GUTTER_TOTAL;
     uint32_t panel_top = g_display_fb.content_top_px - DISPLAY_FB_PANEL_BORDER;
@@ -924,24 +1001,26 @@ static void display_framebuffer_draw_shell_frame(void) {
     resolution_text[res_len] = '\0';
 
     for (uint32_t i = 0; i < sizeof(logo_lines) / sizeof(logo_lines[0]); i++) {
-        display_framebuffer_draw_text_packed(
+        display_framebuffer_draw_text_emphasized_packed(
             DISPLAY_FB_CHAR_W,
             (i * DISPLAY_FB_CHAR_H) + 2U,
             logo_lines[i],
             title_fg,
-            title_bg);
+            title_bg,
+            title_shadow);
     }
     display_framebuffer_draw_header_metrics();
-    display_framebuffer_draw_text_packed(
+    display_framebuffer_draw_text_emphasized_packed(
         DISPLAY_FB_CHAR_W, ((DISPLAY_FB_HEADER_ROWS - 1U) * DISPLAY_FB_CHAR_H) + 2U,
         "FRAMEBUFFER CONSOLE",
-        meta_fg, meta_bg);
-    display_framebuffer_draw_text_right_packed(
+        meta_fg, meta_bg, meta_shadow);
+    display_framebuffer_draw_text_right_emphasized_packed(
         g_display_fb.info.width - DISPLAY_FB_CHAR_W,
         ((DISPLAY_FB_HEADER_ROWS - 1U) * DISPLAY_FB_CHAR_H) + 2U,
         resolution_text,
         meta_fg,
-        meta_bg);
+        meta_bg,
+        meta_shadow);
 }
 
 void display_init(void) {

@@ -13,6 +13,7 @@ The foreground I/O / ergonomics work described below is complete, and the immedi
 - first landed slice: the existing shell now boots under a fixed VGA text-mode chrome header so the system gets an immediate visual upgrade without changing the runtime model
 - early groundwork now in place: the kernel captures the bootloader framebuffer descriptor when the Multiboot tag is present
 - the framebuffer path is now live again: the kernel requests an optional `1024x768x32` mode, maps direct-RGB framebuffers safely, and renders a minimal framebuffer text shell while keeping VGA fallback
+- latest landed polish slice: the framebuffer header chrome now renders the ASCII logo, title, and readouts with a subtle shadow pass so the existing bootstrap font reads more cleanly
 - next planned slice: improve framebuffer font coverage and general visual polish on top of the new baseline
 
 ## Current baseline

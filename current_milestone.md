@@ -48,6 +48,7 @@ Start the first genuinely visual UI track without jumping straight into a deskto
 - [x] Make the input strip status live and switch prompt overflow from hard clamping to trailing-window clipping (`done`)
 - [x] Densify the framebuffer bootstrap glyph raster so the current shell is more readable without replacing the glyph table yet (`done`)
 - [x] Make the prompt badge show mode plus monotonic uptime seconds on redraw (`done`)
+- [x] Add shadowed framebuffer chrome text so the title/logo/readouts remain legible against richer header bands (`done`)
 
 ## Risks
 - Risk: the first visible UI lift is still text mode, so it can look more polished without yet being a real graphics stack.
@@ -77,6 +78,7 @@ Start the first genuinely visual UI track without jumping straight into a deskto
 - [x] The prompt strip now flips between `READY`, `EDIT`, and `CLIP`, and long prompt input keeps the newest text visible instead of pinning every extra character to the last cell
 - [x] The framebuffer shell now rasterizes the existing bootstrap glyph set more densely, improving readability before any larger font-table replacement
 - [x] The prompt badge now shows edit state plus elapsed monotonic seconds (`R`/`E`/`C`) instead of a static word-only indicator
+- [x] The framebuffer header chrome now renders the ASCII logo, header metrics, and console title with a subtle shadow pass for cleaner contrast
 
 ## Notes / decisions
 - 2026-02-27 - Phase 5 completed: wait-driven child synchronization, process-owned FD ownership, and deterministic task-stack/loader-scratch reclamation are in place.
@@ -139,4 +141,7 @@ Start the first genuinely visual UI track without jumping straight into a deskto
   - `make check`
 - 2026-03-01 - The prompt-lane badge now renders a compact live status (`R`/`E`/`C`) plus elapsed monotonic seconds, so the split console shows runtime movement without needing a larger widget.
 - 2026-03-01 - Validation for the prompt-badge runtime slice:
+  - `make check`
+- 2026-03-03 - Landed a narrow Phase 9 chrome-readability slice: framebuffer header/logo text now uses a shadowed glyph pass, improving contrast without replacing the bootstrap font table yet.
+- 2026-03-03 - Validation for the chrome-readability slice:
   - `make check`
