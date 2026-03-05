@@ -1,4 +1,4 @@
-# SkezOS Phase 5 Process Lifecycle + FD Ownership Hardening Design Note
+# SkezOS Process Lifecycle + FD Ownership Hardening Design Note
 
 ## Scope
 
@@ -18,7 +18,7 @@ Phase 4 delivered loader/VFS/syscall bring-up, but it retained shortcuts that bl
 - child completion polling in demos is retry/yield based
 - task stacks and loader scratch allocations are not reclaimed
 
-Phase 5 removes these constraints so later userland work does not build on unstable lifecycle semantics.
+Lifecycle hardening removes these constraints so later userland work does not build on unstable lifecycle semantics.
 
 ## Process and FD model
 
@@ -66,7 +66,7 @@ If parent is gone before child reap, preserve current bootstrap fallback behavio
 
 ## Resource reclamation targets
 
-Phase 5 must establish deterministic ownership and release points for:
+Lifecycle hardening must establish deterministic ownership and release points for:
 
 - kernel task stacks
 - loader scratch allocations used during ELF load
@@ -84,7 +84,7 @@ If `kfree` is still partial, track allocations explicitly and prove bounded grow
 
 ## Current status (2026-02-27)
 
-Phase 5 is complete.
+Lifecycle hardening is complete.
 
 Implemented:
 
@@ -95,28 +95,30 @@ Implemented:
 - `SYS_WAITPID` (minimal blocking, `pid > 0` or `pid == -1`, `options == 0`) is wired
 - spawned-slot demo userland uses explicit `waitpid` synchronization
 - large-block `kfree` support reclaims task stacks and ELF loader scratch allocations
-- `make qemu-smoke-phase5` now checks wait-driven lifecycle behavior plus stack/scratch reclamation
+- `make qemu-smoke-lifecycle` now checks wait-driven lifecycle behavior plus stack/scratch reclamation using stable `SMOKE_LIFECYCLE_*` markers
 
 Validation used:
 
 - `make qemu-smoke-phase4-repeat PHASE4_REPEAT=2`
-- `make qemu-smoke-phase5`
+- `make qemu-smoke-lifecycle`
 - `make qemu-smoke-userfault`
 
 Observed bounded-liveness signal:
 
-- Phase 5 smoke now requires the final `sched: deferred stack reclaimed live_large=65536` watermark, proving transient task-stack and loader-scratch allocations return to the steady-state footprint for the always-on kernel tasks
+- Lifecycle smoke now requires the final `SMOKE_LIFECYCLE_STACK_DEFERRED` marker, proving transient task-stack and loader-scratch allocations are reclaimed back toward steady state for always-on kernel tasks
 
 ## Validation
 
-Add `make qemu-smoke-phase5` with checks for:
+Smoke marker contract: `docs/lifecycle_smoke_marker_contract.md`
+
+Add `make qemu-smoke-lifecycle` with checks for:
 
 - parent spawns child and waits deterministically
 - child exit status observed correctly by parent
 - open/read/close behavior still works through the new FD layer
 - repeated runs do not show unbounded task/loader allocation growth
 
-Keep `qemu-smoke-phase4-repeat` as a regression gate while introducing Phase 5 changes.
+Keep `qemu-smoke-phase4-repeat` as a regression gate while introducing Lifecycle hardening changes.
 
 ## Non-goals
 

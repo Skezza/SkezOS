@@ -166,7 +166,7 @@ Bootstrap automation note (current implementation):
 
 ## Carried-Forward Bootstrap Limitations (At Phase 4 Handoff)
 
-These were retained at the end of Phase 4 and were expected to change in Phase 5+:
+These were retained at the end of Phase 4 and were expected to change in lifecycle hardening:
 
 - user binaries are `ET_EXEC` and linked for fixed addresses (no relocation or dynamic placement)
 - runtime `SYS_SPAWN` uses a small fixed path-to-slot table for demo binaries (not general process loading)
@@ -184,6 +184,6 @@ Phase 4 is considered complete for loader/VFS/bootstrap syscall goals. The immed
 - wait-driven parent/child synchronization
 - deterministic reclaim on exit/reap
 
-See `docs/phase5_process_fd_lifecycle_design_note.md` for the active design baseline.
+See `docs/process_fd_lifecycle_design_note.md` for the active design baseline.
 
-Phase 5 completion note: wait-driven spawn synchronization, process-owned FD-table wiring, and transient task-stack/loader-scratch reclamation are now implemented. Active follow-up work is Phase 6 userland workflow + shell bootstrap.
+Lifecycle hardening completion note: wait-driven spawn synchronization, process-owned FD-table wiring, and transient task-stack/loader-scratch reclamation are now implemented. Active follow-up work is Phase 6 userland workflow + shell bootstrap.

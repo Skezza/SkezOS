@@ -1,6 +1,6 @@
 # SkezOS User Mode + Syscall Design Note (Phase 3)
 
-Status note (2026-02-27): this document captures Phase 3 bootstrap only. Current syscall/lifecycle behavior has advanced in Phase 4/5 (`SYS_READ`, `SYS_OPEN`, `SYS_CLOSE`, `SYS_SPAWN` pid return, and `SYS_WAITPID`); see `docs/phase4_loader_vfs_design_note.md` and `docs/phase5_process_fd_lifecycle_design_note.md`.
+Status note (2026-02-27): this document captures Phase 3 bootstrap only. Current syscall/lifecycle behavior has advanced in Phase 4 + lifecycle hardening (`SYS_READ`, `SYS_OPEN`, `SYS_CLOSE`, `SYS_SPAWN` pid return, and `SYS_WAITPID`); see `docs/phase4_loader_vfs_design_note.md` and `docs/process_fd_lifecycle_design_note.md`.
 
 ## Scope
 

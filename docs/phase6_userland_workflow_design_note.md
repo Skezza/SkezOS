@@ -12,7 +12,7 @@ The goal is usability, not POSIX completeness.
 
 ## Why this phase now
 
-Phase 5 removed the main lifecycle blockers:
+Lifecycle hardening removed the main lifecycle blockers:
 
 - child processes can be spawned and waited deterministically
 - FD ownership is process-local
@@ -121,11 +121,11 @@ Minimum assertions:
 - boot reaches shell/init prompt deterministically
 - shell can launch at least one external `/bin` command and wait for it
 - builtins and external commands both produce expected console output
-- lifecycle regressions from Phase 5 remain covered by the existing Phase 4/5 smoke targets
+- lifecycle regressions from the lifecycle hardening milestone remain covered by `qemu-smoke-lifecycle`
 
 Current validation evidence for the interactive slice:
 
-- `make qemu-smoke-phase5`
+- `make qemu-smoke-lifecycle`
 - `make qemu-smoke-userfault`
 - `make qemu-smoke-shell-core`
 - `make check`

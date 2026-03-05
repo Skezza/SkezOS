@@ -357,6 +357,8 @@ int elf32_inspect_user_static_path(const char *path, struct elf32_user_layout *o
         kmalloc_get_stats(&stats);
         KLOGI("elf32: scratch reclaimed path=%s live_large=%u",
               path, (uint32_t)stats.large_bytes_used);
+        KLOGI("SMOKE_LIFECYCLE_ELF_SCRATCH_RECLAIM path=%s live_large=%u",
+              path, (uint32_t)stats.large_bytes_used);
     }
     return rc;
 }
@@ -509,6 +511,8 @@ cleanup:
         kfree(file_buf);
         kmalloc_get_stats(&stats);
         KLOGI("elf32: scratch reclaimed path=%s live_large=%u",
+              path, (uint32_t)stats.large_bytes_used);
+        KLOGI("SMOKE_LIFECYCLE_ELF_SCRATCH_RECLAIM path=%s live_large=%u",
               path, (uint32_t)stats.large_bytes_used);
     }
     return rc;

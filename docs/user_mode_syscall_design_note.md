@@ -1,6 +1,6 @@
 # SkezOS User Mode + Syscall Bootstrap Design Note (Phase 3)
 
-Status note (2026-02-27): this document is intentionally Phase 3 bootstrap context. The active syscall/process-lifecycle baseline now lives in `docs/phase4_loader_vfs_design_note.md` and `docs/phase5_process_fd_lifecycle_design_note.md` (`SYS_WAITPID`, process FD ownership, wait-driven spawn flow).
+Status note (2026-02-27): this document is intentionally Phase 3 bootstrap context. The active syscall/process-lifecycle baseline now lives in `docs/phase4_loader_vfs_design_note.md` and `docs/process_fd_lifecycle_design_note.md` (`SYS_WAITPID`, process FD ownership, wait-driven spawn flow).
 
 ## Scope
 

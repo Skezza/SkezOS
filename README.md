@@ -9,9 +9,10 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 - **Build**: `make` (you need `gcc`/`as`/`ld` with `-m32` support, plus `grub-mkrescue`, `xorriso`, `qemu-system-i386`, `tar`, and `od`).
 - **Userland packaging**: `make` now builds mixed `userland/` assembly/C programs into `/bin/*.elf` and regenerates the built-in initramfs blob automatically.
 - **Console behavior**: when GRUB can provide a direct-RGB framebuffer, the shell now renders on a minimal framebuffer text surface; otherwise it falls back to the styled VGA text shell. Background worker demo logs still stay quiet once the shell owns the console.
-- **Quick validation**: `make check` (toolchain check + clean build + userfault recovery + shell-core smoke + reliability smoke)
+- **Quick validation (per-PR)**: `make check` (toolchain check + clean build + userfault recovery + shell-core smoke + reliability smoke)
+- **Release/nightly validation**: `make check-release` (runs `make check` plus lifecycle smoke)
 - **User fault smoke**: `make qemu-smoke-userfault` (asserts shell-launched `/bin/fault.elf` triggers user-page-fault recovery and returns control cleanly)
-- **Phase 5 smoke**: `make qemu-smoke-phase5` (asserts wait-driven spawn/reap plus FD open/read/close flow)
+- **Lifecycle smoke**: `make qemu-smoke-lifecycle` (asserts wait-driven spawn/reap plus FD open/read/close flow using stable `SMOKE_LIFECYCLE_*` markers)
 - **Shell-core smoke**: `make qemu-smoke-shell-core` (asserts interactive `/bin/sh.elf` command dispatch, foreground stdin handoff via `readln`, real `ps`/`ls`, cwd-aware `./tool` launching, BusyBox-style multicall dispatch, external `echo`/`cat`, unknown-command failure handling, and `waitpid` completion)
 - **Reliability smoke**: `make qemu-smoke-reliability` (asserts timing + stress paths: `uptime`, `sleep`, pipe/redirection behavior, and external `diag` including pipe/dup self-checks)
 - **Run**: `make run` or `qemu-system-i386 -cdrom skezos.iso` if you want to keep control of the command line.
@@ -22,19 +23,19 @@ Tiny 32-bit x86 kernel. Boots through GRUB’s Multiboot2 entry, lives mostly in
 
 1. Install `gcc`, `as`, and `ld` with 32-bit output support, plus `grub-mkrescue`, `xorriso`, `qemu-system-i386`, `tar`, and `od`.
 2. `make` – assembles the `userland/` ELFs, regenerates `kernel/initramfs_demo_blob.c`, compiles the kernel, links `kernel.elf`, copies it into `iso/boot`, and packages `skezos.iso`.
-3. `make check` to run the default validation chain (toolchain check, clean rebuild, `qemu-smoke-userfault`, `qemu-smoke-shell-core`, then `qemu-smoke-reliability`).
-4. `make qemu-smoke-userfault` to validate the Phase 3 user-fault recovery path.
-5. `make qemu-smoke-phase5` to validate Phase 5 lifecycle + FD ownership behavior.
-6. `make qemu-smoke-shell-core` to validate the frozen interactive bootstrap shell baseline (`pwd`, `cd`, `ls`, `./busybox`, `readln`, `ps`, external `echo`, external `cat`, unknown-command failure, `exit`).
-7. `make qemu-smoke-reliability` to validate timing and reliability probes (`uptime`, `sleep`, pipe/redirection paths, `diag`, `exit`).
-8. `make run` or `qemu-system-i386 -cdrom skezos.iso` to boot it interactively.
+3. `make check` to run the per-PR validation chain (toolchain check, clean rebuild, `qemu-smoke-userfault`, `qemu-smoke-shell-core`, then `qemu-smoke-reliability`).
+4. `make check-release` for release/nightly validation (`make check` + `qemu-smoke-lifecycle`).
+5. `make qemu-smoke-userfault` to validate the Phase 3 user-fault recovery path.
+6. `make qemu-smoke-lifecycle` to validate lifecycle + FD ownership behavior.
+7. `make qemu-smoke-shell-core` to validate the frozen interactive bootstrap shell baseline (`pwd`, `cd`, `ls`, `./busybox`, `readln`, `ps`, external `echo`, external `cat`, unknown-command failure, `exit`).
+8. `make qemu-smoke-reliability` to validate timing and reliability probes (`uptime`, `sleep`, pipe/redirection paths, `diag`, `exit`).
+9. `make run` or `qemu-system-i386 -cdrom skezos.iso` to boot it interactively.
 
 <img width="1124" height="858" alt="Screenshot from 2026-02-13 00-15-09" src="https://github.com/user-attachments/assets/a12490a1-f83a-4b03-827b-6973b0909c65" />
 
 **Framebuffer support!** :-)
 
 <img width="1052" height="863" alt="image" src="https://github.com/user-attachments/assets/8d7cdf98-b555-4784-826e-2409a56afc64" />
-
 
 
 ### Keep tinkering
@@ -49,7 +50,8 @@ It’s intentionally minimal. The current shell is still bootstrap-grade: whites
 - `docs/kernel_architecture_and_coding_rules.md`
 - `docs/kernel_memory_layout.md`
 - `docs/phase4_loader_vfs_design_note.md`
-- `docs/phase5_process_fd_lifecycle_design_note.md`
+- `docs/process_fd_lifecycle_design_note.md`
+- `docs/lifecycle_smoke_marker_contract.md`
 - `docs/phase6_userland_workflow_design_note.md`
 
 ### License

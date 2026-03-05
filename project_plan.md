@@ -121,7 +121,7 @@ Exit criteria:
 - Shell can execute binaries from `/bin`
 - File reading is stable and repeatable
 
-## Phase 5: Userspace ergonomics (4–8 weeks)
+## Userspace ergonomics stage (4-8 weeks)
 **Goal:** become usable, not just bootable.
 
 Deliverables:

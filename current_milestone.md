@@ -47,21 +47,21 @@ Start the post-Phase-9 reliability branch with a small, testable operator-facing
 - [x] The next worker can pick a concrete reliability follow-up without reopening the Phase 9 UI work
 
 ## Notes / decisions
-- 2026-02-27 - Phase 5 completed: wait-driven child synchronization, process-owned FD ownership, and deterministic task-stack/loader-scratch reclamation are in place.
-- 2026-02-27 - Phase 5 validation used:
+- 2026-02-27 - Lifecycle hardening milestone completed: wait-driven child synchronization, process-owned FD ownership, and deterministic task-stack/loader-scratch reclamation are in place.
+- 2026-02-27 - Lifecycle hardening validation used:
   - `make qemu-smoke-phase4-repeat PHASE4_REPEAT=2`
-  - `make qemu-smoke-phase5`
+  - `make qemu-smoke-lifecycle`
   - `make qemu-smoke-userfault`
 - 2026-02-27 - Active follow-up milestone is Phase 6 userland workflow + shell bootstrap.
 - 2026-02-27 - Phase 6 design note added: `docs/phase6_userland_workflow_design_note.md`.
 - 2026-02-27 - Landed Phase 6 bootstrap foundation: shared assembly syscall/runtime includes now back the existing `/bin/hello*.elf` demos, and `make` regenerates `kernel/initramfs_demo_blob.c` from `userland/` sources automatically.
 - 2026-02-27 - Validation for the new Phase 6 foundation slice:
-  - `make qemu-smoke-phase5`
+  - `make qemu-smoke-lifecycle`
   - `make qemu-smoke-userfault`
 - 2026-02-27 - Chose direct `/bin/sh.elf` bootstrap. The kernel now starts a fixed-slot shell task at boot, and `make qemu-smoke-shell-core` asserts the shell banner/prompt path.
 - 2026-02-27 - Phase 6 shell bootstrap is now interactive: `/dev/console` input hands off to `user-shell`, the shell runs a prompt/read/dispatch loop, external `/bin/echo.elf` and `/bin/cat.elf` run through `spawn` + `waitpid`, and `SYS_SPAWN_EX` hands children a flat inherited cmdline.
 - 2026-02-27 - Validation for the interactive Phase 6 slice:
-  - `make qemu-smoke-phase5`
+  - `make qemu-smoke-lifecycle`
   - `make qemu-smoke-userfault`
   - `make qemu-smoke-shell-core`
 - 2026-02-27 - Phase 6 completion landed: child launch now inspects ET_EXEC images directly, `uaccess` is task-aware, `/bin/echo.elf` is external, and `make check` now runs the active userfault + Phase 6 smoke path.

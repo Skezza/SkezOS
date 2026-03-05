@@ -644,6 +644,10 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
           sched_current_task_name(),
           waited_pid,
           waited_exit);
+    KLOGI("SMOKE_LIFECYCLE_WAIT_REAP parent_pid=%d waited_pid=%d exit=%d",
+          sched_current_task_pid(),
+          waited_pid,
+          waited_exit);
     return (uint32_t)waited_pid;
 }
 

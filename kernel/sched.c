@@ -190,6 +190,8 @@ static void sched_reap_task_locked(struct task *task) {
         kmalloc_get_stats(&stats);
         KLOGI("sched: task stack reclaimed pid=%d name=%s live_large=%u",
               pid, name, (uint32_t)stats.large_bytes_used);
+        KLOGI("SMOKE_LIFECYCLE_STACK_RECLAIM pid=%d live_large=%u",
+              pid, (uint32_t)stats.large_bytes_used);
     }
     memset(task, 0, sizeof(*task));
     task->state = TASK_UNUSED;
@@ -254,6 +256,8 @@ static void sched_flush_deferred_stack_free_locked(void) {
     g_deferred_stack_free = 0;
     kmalloc_get_stats(&stats);
     KLOGI("sched: deferred stack reclaimed live_large=%u",
+          (uint32_t)stats.large_bytes_used);
+    KLOGI("SMOKE_LIFECYCLE_STACK_DEFERRED live_large=%u",
           (uint32_t)stats.large_bytes_used);
 }
 

@@ -14,6 +14,7 @@
 	mov %eax, %edi
 
 	user_write $msg_open_ok, $msg_open_ok_len
+	user_write $smoke_fd_open_ok, $smoke_fd_open_ok_len
 
 	/* n = read(fd, readbuf, sizeof(readbuf)) */
 	user_syscall3 $SYS_READ, %edi, $readbuf, $readbuf_len
@@ -23,8 +24,8 @@
 	jz read_done
 
 	user_write $msg_read_prefix, $msg_read_prefix_len
-
 	user_write $readbuf, %esi
+	user_write $smoke_fd_read_ok, $smoke_fd_read_ok_len
 
 read_done:
 	/* close(fd) */
@@ -33,6 +34,7 @@ read_done:
 	js close_fail
 
 	user_write $msg_close_ok, $msg_close_ok_len
+	user_write $smoke_fd_close_ok, $smoke_fd_close_ok_len
 	user_write $msg1, $msg1_len
 	user_exit $0
 
@@ -86,6 +88,21 @@ msg_close_fail:
 	.ascii "elf-d: close fail\n"
 msg_close_fail_end:
 	.set msg_close_fail_len, msg_close_fail_end - msg_close_fail
+
+smoke_fd_open_ok:
+	.ascii "SMOKE_LIFECYCLE_FD_OPEN_OK\n"
+smoke_fd_open_ok_end:
+	.set smoke_fd_open_ok_len, smoke_fd_open_ok_end - smoke_fd_open_ok
+
+smoke_fd_read_ok:
+	.ascii "SMOKE_LIFECYCLE_FD_READ_OK\n"
+smoke_fd_read_ok_end:
+	.set smoke_fd_read_ok_len, smoke_fd_read_ok_end - smoke_fd_read_ok
+
+smoke_fd_close_ok:
+	.ascii "SMOKE_LIFECYCLE_FD_CLOSE_OK\n"
+smoke_fd_close_ok_end:
+	.set smoke_fd_close_ok_len, smoke_fd_close_ok_end - smoke_fd_close_ok
 
 msg1:
 	.ascii "elf-d: exit\n"

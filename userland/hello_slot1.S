@@ -24,6 +24,7 @@
 	mov %eax, %edi
 
 	user_write $msg_spawn_ok, $msg_spawn_ok_len
+	user_write $smoke_spawn1_ok, $smoke_spawn1_ok_len
 
 	/* spawn("/bin/hello4.elf", len) */
 	user_syscall2 $SYS_SPAWN, $spawn_path2, $spawn_path2_len
@@ -32,6 +33,7 @@
 	mov %eax, %ebp
 
 	user_write $msg_spawn2_ok, $msg_spawn2_ok_len
+	user_write $smoke_spawn2_ok, $smoke_spawn2_ok_len
 
 	/* waitpid(child1, &status1, 0) */
 	user_syscall3 $SYS_WAITPID, %edi, $wait_status1, $0
@@ -39,6 +41,7 @@
 	jne wait1_fail
 
 	user_write $msg_wait1_ok, $msg_wait1_ok_len
+	user_write $smoke_wait1_ok, $smoke_wait1_ok_len
 
 	/* waitpid(child2, &status2, 0) */
 	user_syscall3 $SYS_WAITPID, %ebp, $wait_status2, $0
@@ -46,6 +49,7 @@
 	jne wait2_fail
 
 	user_write $msg_wait2_ok, $msg_wait2_ok_len
+	user_write $smoke_wait2_ok, $smoke_wait2_ok_len
 
 	/* Spawn hello3 again after explicit wait/reap. */
 	user_syscall2 $SYS_SPAWN, $spawn_path, $spawn_path_len
@@ -54,6 +58,7 @@
 	mov %eax, %esi
 
 	user_write $msg_spawn3_ok, $msg_spawn3_ok_len
+	user_write $smoke_spawn3_ok, $smoke_spawn3_ok_len
 
 	/* waitpid(child3, &status3, 0) */
 	user_syscall3 $SYS_WAITPID, %esi, $wait_status3, $0
@@ -61,6 +66,7 @@
 	jne wait3_fail
 
 	user_write $msg_wait3_ok, $msg_wait3_ok_len
+	user_write $smoke_wait3_ok, $smoke_wait3_ok_len
 	jmp done
 
 spawn1_fail:
@@ -175,6 +181,36 @@ msg_wait3_fail:
 	.ascii "elf-b: sys_waitpid /bin/hello3.elf reuse fail\n"
 msg_wait3_fail_end:
 	.set msg_wait3_fail_len, msg_wait3_fail_end - msg_wait3_fail
+
+smoke_spawn1_ok:
+	.ascii "SMOKE_LIFECYCLE_SPAWN_HELLO3_OK\n"
+smoke_spawn1_ok_end:
+	.set smoke_spawn1_ok_len, smoke_spawn1_ok_end - smoke_spawn1_ok
+
+smoke_spawn2_ok:
+	.ascii "SMOKE_LIFECYCLE_SPAWN_HELLO4_OK\n"
+smoke_spawn2_ok_end:
+	.set smoke_spawn2_ok_len, smoke_spawn2_ok_end - smoke_spawn2_ok
+
+smoke_spawn3_ok:
+	.ascii "SMOKE_LIFECYCLE_SPAWN_HELLO3_REUSE_OK\n"
+smoke_spawn3_ok_end:
+	.set smoke_spawn3_ok_len, smoke_spawn3_ok_end - smoke_spawn3_ok
+
+smoke_wait1_ok:
+	.ascii "SMOKE_LIFECYCLE_WAIT_HELLO3_OK\n"
+smoke_wait1_ok_end:
+	.set smoke_wait1_ok_len, smoke_wait1_ok_end - smoke_wait1_ok
+
+smoke_wait2_ok:
+	.ascii "SMOKE_LIFECYCLE_WAIT_HELLO4_OK\n"
+smoke_wait2_ok_end:
+	.set smoke_wait2_ok_len, smoke_wait2_ok_end - smoke_wait2_ok
+
+smoke_wait3_ok:
+	.ascii "SMOKE_LIFECYCLE_WAIT_HELLO3_REUSE_OK\n"
+smoke_wait3_ok_end:
+	.set smoke_wait3_ok_len, smoke_wait3_ok_end - smoke_wait3_ok
 
 msg1:
 	.ascii "elf-b: done\n"

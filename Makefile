@@ -18,6 +18,7 @@ LDFLAGS = -m elf_i386
 BUILD = build
 ISO   = skezos.iso
 SMOKE_LOG = $(BUILD)/qemu-smoke.log
+LIFECYCLE_SMOKE_LOG = $(BUILD)/qemu-smoke-lifecycle.log
 SMOKE_TIMEOUT_SECS ?= 18
 SHELL_SMOKE_TIMEOUT_SECS ?= 35
 SMOKE_MARKER = SKEZOS_SMOKE_READY
@@ -68,7 +69,7 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/ls.elf \
 	$(USERLAND_BUILD)/busybox.elf
 
-.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-phase5 qemu-smoke-shell-core qemu-smoke-reliability check
+.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability check check-pr check-release check-nightly
 
 all: $(ISO)
 
@@ -344,44 +345,93 @@ qemu-smoke-phase4-repeat:
 	done; \
 	echo "[qemu-smoke-phase4-repeat] PASS ($(PHASE4_REPEAT) runs)"
 
-qemu-smoke-phase5:
-	@$(MAKE) qemu-smoke-phase4
-	@if ! grep -Fq "elf-b: sys_waitpid /bin/hello3.elf ok" $(BUILD)/qemu-smoke-phase4.log; then \
-		echo "[qemu-smoke-phase5] Missing waitpid hello3 success log"; \
-		tail -n 180 $(BUILD)/qemu-smoke-phase4.log; \
+qemu-smoke-lifecycle: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(LIFECYCLE_SMOKE_LOG)
+	@echo "[qemu-smoke-lifecycle] Booting headless VM with scripted lifecycle input..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-lifecycle,$(LIFECYCLE_SMOKE_LOG),$(LIFECYCLE_SMOKE_SCRIPT))
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-lifecycle,$(LIFECYCLE_SMOKE_LOG))
+	@if ! grep -Fq "SMOKE_LIFECYCLE_SPAWN_HELLO3_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing spawn hello3 marker"; \
+		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
 		exit 1; \
 	fi
-	@if ! grep -Fq "elf-b: sys_waitpid /bin/hello4.elf ok" $(BUILD)/qemu-smoke-phase4.log; then \
-		echo "[qemu-smoke-phase5] Missing waitpid hello4 success log"; \
-		tail -n 180 $(BUILD)/qemu-smoke-phase4.log; \
+	@if ! grep -Fq "SMOKE_LIFECYCLE_SPAWN_HELLO4_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing spawn hello4 marker"; \
+		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
 		exit 1; \
 	fi
-	@if ! grep -Fq "elf-b: sys_waitpid /bin/hello3.elf reuse ok" $(BUILD)/qemu-smoke-phase4.log; then \
-		echo "[qemu-smoke-phase5] Missing waitpid reuse success log"; \
-		tail -n 200 $(BUILD)/qemu-smoke-phase4.log; \
+	@if ! grep -Fq "SMOKE_LIFECYCLE_SPAWN_HELLO3_REUSE_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing spawn reuse marker"; \
+		tail -n 200 $(LIFECYCLE_SMOKE_LOG); \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fc 'sys_waitpid:' $(BUILD)/qemu-smoke-phase4.log)" -lt 3 ]; then \
-		echo "[qemu-smoke-phase5] Expected at least three sys_waitpid kernel logs"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase4.log; \
+	@if ! grep -Fq "SMOKE_LIFECYCLE_WAIT_HELLO3_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing waitpid hello3 marker"; \
+		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fc 'elf32: scratch reclaimed path=' $(BUILD)/qemu-smoke-phase4.log)" -lt 5 ]; then \
-		echo "[qemu-smoke-phase5] Expected scratch reclamation for all ELF loads"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase4.log; \
+	@if ! grep -Fq "SMOKE_LIFECYCLE_WAIT_HELLO4_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing waitpid hello4 marker"; \
+		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sched: task stack reclaimed pid=" $(BUILD)/qemu-smoke-phase4.log; then \
-		echo "[qemu-smoke-phase5] Missing waited-child stack reclamation log"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase4.log; \
+	@if ! grep -Fq "SMOKE_LIFECYCLE_WAIT_HELLO3_REUSE_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing waitpid reuse marker"; \
+		tail -n 200 $(LIFECYCLE_SMOKE_LOG); \
 		exit 1; \
 	fi
-	@if ! grep -Eq "sched: deferred stack reclaimed live_large=(65536|69632|81920|86016)" $(BUILD)/qemu-smoke-phase4.log; then \
-		echo "[qemu-smoke-phase5] Missing final deferred stack reclamation watermark"; \
-		tail -n 240 $(BUILD)/qemu-smoke-phase4.log; \
+	@if ! grep -Fq "SMOKE_LIFECYCLE_FD_OPEN_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing fd open marker"; \
+		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
 		exit 1; \
 	fi
-	@echo "[qemu-smoke-phase5] PASS"
+	@if ! grep -Fq "SMOKE_LIFECYCLE_FD_READ_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing fd read marker"; \
+		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
+		exit 1; \
+	fi
+	@if ! grep -Fq "SMOKE_LIFECYCLE_FD_CLOSE_OK" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing fd close marker"; \
+		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'SMOKE_LIFECYCLE_WAIT_REAP' $(LIFECYCLE_SMOKE_LOG))" -lt 3 ]; then \
+		echo "[qemu-smoke-lifecycle] Expected at least three wait/reap kernel markers"; \
+		tail -n 220 $(LIFECYCLE_SMOKE_LOG); \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'SMOKE_LIFECYCLE_ELF_SCRATCH_RECLAIM' $(LIFECYCLE_SMOKE_LOG))" -lt 5 ]; then \
+		echo "[qemu-smoke-lifecycle] Expected scratch reclamation markers for all ELF loads"; \
+		tail -n 220 $(LIFECYCLE_SMOKE_LOG); \
+		exit 1; \
+	fi
+	@if ! grep -Fq "SMOKE_LIFECYCLE_STACK_RECLAIM" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing waited-child stack reclaim marker"; \
+		tail -n 220 $(LIFECYCLE_SMOKE_LOG); \
+		exit 1; \
+	fi
+	@if ! grep -Fq "SMOKE_LIFECYCLE_STACK_DEFERRED live_large=" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing final deferred stack reclaim watermark"; \
+		tail -n 240 $(LIFECYCLE_SMOKE_LOG); \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sh: exit" $(LIFECYCLE_SMOKE_LOG); then \
+		echo "[qemu-smoke-lifecycle] Missing shell exit line"; \
+		tail -n 200 $(LIFECYCLE_SMOKE_LOG); \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-lifecycle] PASS"
+
+define LIFECYCLE_SMOKE_SCRIPT
+printf 'cd /bin\n'; \
+sleep 0.25; \
+printf './hello2.elf\n'; \
+sleep 0.25; \
+printf '\n'; \
+sleep 4.00; \
+printf 'exit\n';
+endef
 
 define SHELL_CORE_SMOKE_SCRIPT
 printf 'pwd\n'; \
@@ -643,13 +693,20 @@ qemu-smoke-reliability: $(ISO)
 	fi
 	@echo "[qemu-smoke-reliability] PASS"
 
-check:
+check-pr:
 	@$(MAKE) toolchain-check
 	@$(MAKE) clean
 	@$(MAKE) all
 	@$(MAKE) qemu-smoke-userfault
 	@$(MAKE) qemu-smoke-shell-core
 	@$(MAKE) qemu-smoke-reliability
+
+check: check-pr
+
+check-release: check-pr
+	@$(MAKE) qemu-smoke-lifecycle
+
+check-nightly: check-release
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.elf
