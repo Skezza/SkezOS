@@ -5,25 +5,180 @@
 #include "idt.h"
 #include "kerrno.h"
 #include "kfile.h"
+#include "kpipe.h"
 #include "klog.h"
 #include "memory_layout.h"
 #include "sched.h"
 #include "timer.h"
 #include "uaccess.h"
 #include "usermode.h"
+#include "utils.h"
 #include "vfs.h"
 
 extern void syscall_entry_stub(void);
 
 #define SYSCALL_SPAWN_PATH_MAX 64U
 #define SYSCALL_CMDLINE_MAX    128U
-#define SYSCALL_OPEN_PATH_MAX  64U
+#define SYSCALL_OPEN_PATH_MAX  96U
 #define SYSCALL_TASK_SNAPSHOT_MAX 16U
+#define SYSCALL_LIST_DIR_PATH_MAX 96U
+#define SYSCALL_LIST_DIR_MAX 16U
 
 static int syscall_stdio_kfile_for_fd(uint32_t fd, int for_write, struct kfile **out_file);
+static int syscall_copy_user_path_raw(uint32_t path_ptr,
+                                      uint32_t path_len,
+                                      char *out,
+                                      uint32_t out_cap);
+static int syscall_resolve_path_raw(const char *raw,
+                                    uint32_t raw_len,
+                                    char *out,
+                                    uint32_t out_cap,
+                                    uint32_t *out_len);
+static int syscall_kfile_for_dup(uint32_t fd, struct kfile **out_file);
 
 static uint32_t syscall_ret_err(int err) {
     return (uint32_t)(-(int32_t)err);
+}
+
+static int syscall_normalize_path(const char *base,
+                                  const char *path,
+                                  uint32_t path_len,
+                                  char *out,
+                                  uint32_t out_cap,
+                                  uint32_t *out_len) {
+    uint32_t path_idx = 0U;
+    uint32_t write_len = 0U;
+
+    if (!path || path_len == 0U || !out || out_cap < 2U || !out_len) {
+        return -KERR_INVAL;
+    }
+    *out_len = 0U;
+
+    if (path[0] == '/') {
+        out[0] = '/';
+        out[1] = '\0';
+        write_len = 1U;
+        while (path_idx < path_len && path[path_idx] == '/') {
+            path_idx++;
+        }
+    } else {
+        uint32_t base_len = 0U;
+
+        if (!base || base[0] != '/') {
+            return -KERR_INVAL;
+        }
+        base_len = (uint32_t)strlen(base);
+        if (base_len + 1U > out_cap) {
+            return -KERR_INVAL;
+        }
+        memcpy(out, base, base_len);
+        out[base_len] = '\0';
+        write_len = base_len;
+    }
+
+    while (path_idx < path_len) {
+        uint32_t comp_start = path_idx;
+        uint32_t comp_len;
+
+        while (path_idx < path_len && path[path_idx] != '/') {
+            path_idx++;
+        }
+        comp_len = path_idx - comp_start;
+        while (path_idx < path_len && path[path_idx] == '/') {
+            path_idx++;
+        }
+        if (comp_len == 0U) {
+            continue;
+        }
+        if (comp_len == 1U && path[comp_start] == '.') {
+            continue;
+        }
+        if (comp_len == 2U &&
+            path[comp_start] == '.' &&
+            path[comp_start + 1U] == '.') {
+            if (write_len > 1U) {
+                while (write_len > 1U && out[write_len - 1U] != '/') {
+                    write_len--;
+                }
+                if (write_len > 1U) {
+                    write_len--;
+                }
+                out[write_len] = '\0';
+            }
+            continue;
+        }
+
+        if (write_len > 1U) {
+            if (write_len + 1U >= out_cap) {
+                return -KERR_INVAL;
+            }
+            out[write_len++] = '/';
+        }
+        if (write_len + comp_len >= out_cap) {
+            return -KERR_INVAL;
+        }
+        memcpy(out + write_len, path + comp_start, comp_len);
+        write_len += comp_len;
+        out[write_len] = '\0';
+    }
+
+    if (out[0] == '\0') {
+        out[0] = '/';
+        out[1] = '\0';
+        write_len = 1U;
+    }
+    *out_len = write_len;
+    return 0;
+}
+
+static int syscall_copy_user_path_raw(uint32_t path_ptr,
+                                      uint32_t path_len,
+                                      char *out,
+                                      uint32_t out_cap) {
+    int rc;
+
+    if (!out || out_cap == 0U) {
+        return -KERR_INVAL;
+    }
+    if (path_len == 0U || path_len >= out_cap) {
+        return -KERR_INVAL;
+    }
+
+    rc = uaccess_copy_from_user(out, path_ptr, path_len);
+    if (rc < 0) {
+        return rc;
+    }
+    out[path_len] = '\0';
+    return 0;
+}
+
+static int syscall_resolve_path_raw(const char *raw,
+                                    uint32_t raw_len,
+                                    char *out,
+                                    uint32_t out_cap,
+                                    uint32_t *out_len) {
+    char cwd[SYSCALL_CWD_MAX];
+    uint32_t cwd_len = 0U;
+    int rc;
+
+    if (!raw || raw_len == 0U || !out || out_cap < 2U || !out_len) {
+        return -KERR_INVAL;
+    }
+    if (raw[0] == '/') {
+        if (raw_len + 1U > out_cap) {
+            return -KERR_INVAL;
+        }
+        memcpy(out, raw, raw_len);
+        out[raw_len] = '\0';
+        *out_len = raw_len;
+        return 0;
+    }
+
+    rc = sched_copy_current_task_cwd(cwd, sizeof(cwd), &cwd_len);
+    if (rc < 0) {
+        return rc;
+    }
+    return syscall_normalize_path(cwd, raw, raw_len, out, out_cap, out_len);
 }
 
 static int syscall_stdio_path_for_fd(uint32_t fd, int for_write, const char **out_path) {
@@ -96,6 +251,7 @@ static int syscall_stdio_kfile_for_fd(uint32_t fd, int for_write, struct kfile *
         kfile_close(&opened);
         return rc;
     }
+    (void)kfile_close(&opened);
     if (fd != SYSCALL_FD_STDIN) {
         KLOGI("syscall: stdio fd bind pid=%d task=%s fd=%u path=%s",
               sched_current_task_pid(),
@@ -105,6 +261,25 @@ static int syscall_stdio_kfile_for_fd(uint32_t fd, int for_write, struct kfile *
     }
     *out_file = cached;
     return 0;
+}
+
+static int syscall_kfile_for_dup(uint32_t fd, struct kfile **out_file) {
+    int rc;
+
+    if (!out_file) {
+        return -KERR_INVAL;
+    }
+    *out_file = 0;
+
+    if (fd == SYSCALL_FD_STDIN) {
+        return syscall_stdio_kfile_for_fd(fd, 0, out_file);
+    }
+    if (fd == SYSCALL_FD_STDOUT || fd == SYSCALL_FD_STDERR) {
+        return syscall_stdio_kfile_for_fd(fd, 1, out_file);
+    }
+
+    rc = sched_current_process_fd_get(fd, out_file);
+    return rc;
 }
 
 static uint32_t sys_write(struct syscall_saved_regs *regs) {
@@ -156,34 +331,43 @@ static uint32_t sys_read(struct syscall_saved_regs *regs) {
 static uint32_t sys_spawn(struct syscall_saved_regs *regs) {
     uint32_t path_ptr = regs->ebx;
     uint32_t path_len = regs->ecx;
+    char raw_path[SYSCALL_SPAWN_PATH_MAX];
     char path[SYSCALL_SPAWN_PATH_MAX];
+    uint32_t resolved_len = 0U;
+    int child_pid;
     int rc;
 
     if (!sched_current_task_is_user()) {
         return syscall_ret_err(KERR_NOTSUP);
     }
-    if (path_len == 0U || path_len >= SYSCALL_SPAWN_PATH_MAX) {
-        return syscall_ret_err(KERR_INVAL);
-    }
-
-    rc = uaccess_copy_from_user(path, path_ptr, path_len);
+    rc = syscall_copy_user_path_raw(path_ptr, path_len, raw_path, sizeof(raw_path));
     if (rc < 0) {
         return syscall_ret_err(-rc);
     }
-    path[path_len] = '\0';
-
-    rc = usermode_spawn_path_task(path);
+    rc = syscall_resolve_path_raw(raw_path, path_len, path, sizeof(path), &resolved_len);
     if (rc < 0) {
         return syscall_ret_err(-rc);
     }
-    return (uint32_t)rc;
+
+    child_pid = usermode_spawn_path_task(path);
+    if (child_pid < 0) {
+        return syscall_ret_err(-child_pid);
+    }
+    if (sched_current_task_is_user() &&
+        vfs_console_input_owner_is_task(sched_current_task_pid())) {
+        (void)vfs_console_set_input_owner_task(child_pid);
+    }
+    return (uint32_t)child_pid;
 }
 
 static uint32_t sys_spawn_ex(struct syscall_saved_regs *regs) {
     uint32_t req_ptr = regs->ebx;
     struct syscall_spawn_ex_req req;
+    char raw_path[SYSCALL_SPAWN_PATH_MAX];
     char path[SYSCALL_SPAWN_PATH_MAX];
     char cmdline[SYSCALL_CMDLINE_MAX];
+    uint32_t resolved_len = 0U;
+    int child_pid;
     int rc;
 
     if (!sched_current_task_is_user()) {
@@ -194,21 +378,24 @@ static uint32_t sys_spawn_ex(struct syscall_saved_regs *regs) {
     if (rc < 0) {
         return syscall_ret_err(-rc);
     }
-    if (req.path_len == 0U || req.path_len >= SYSCALL_SPAWN_PATH_MAX) {
-        return syscall_ret_err(KERR_INVAL);
-    }
     if (req.cmdline_len >= SYSCALL_CMDLINE_MAX) {
         return syscall_ret_err(KERR_INVAL);
     }
     if (req.cmdline_len != 0U && req.cmdline_ptr == 0U) {
         return syscall_ret_err(KERR_INVAL);
     }
+    if ((req.flags & ~SYSCALL_SPAWN_FLAG_INHERIT_FDS) != 0U) {
+        return syscall_ret_err(KERR_INVAL);
+    }
 
-    rc = uaccess_copy_from_user(path, req.path_ptr, req.path_len);
+    rc = syscall_copy_user_path_raw(req.path_ptr, req.path_len, raw_path, sizeof(raw_path));
     if (rc < 0) {
         return syscall_ret_err(-rc);
     }
-    path[req.path_len] = '\0';
+    rc = syscall_resolve_path_raw(raw_path, req.path_len, path, sizeof(path), &resolved_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
 
     cmdline[0] = '\0';
     if (req.cmdline_len != 0U) {
@@ -219,18 +406,30 @@ static uint32_t sys_spawn_ex(struct syscall_saved_regs *regs) {
     }
     cmdline[req.cmdline_len] = '\0';
 
-    rc = usermode_spawn_path_task_ex(path, cmdline, req.cmdline_len);
-    if (rc < 0) {
-        return syscall_ret_err(-rc);
+    child_pid = usermode_spawn_path_task_ex(path, cmdline, req.cmdline_len, req.flags);
+    if (child_pid < 0) {
+        KLOGW("sys_spawn_ex: spawn failed pid=%d task=%s path=%s rc=%d flags=%x",
+              sched_current_task_pid(),
+              sched_current_task_name(),
+              path,
+              child_pid,
+              req.flags);
+        return syscall_ret_err(-child_pid);
     }
-    return (uint32_t)rc;
+    if (sched_current_task_is_user() &&
+        vfs_console_input_owner_is_task(sched_current_task_pid())) {
+        (void)vfs_console_set_input_owner_task(child_pid);
+    }
+    return (uint32_t)child_pid;
 }
 
 static uint32_t sys_open(struct syscall_saved_regs *regs) {
     uint32_t path_ptr = regs->ebx;
     uint32_t path_len = regs->ecx;
     uint32_t open_flags = regs->edx;
+    char raw_path[SYSCALL_OPEN_PATH_MAX];
     char path[SYSCALL_OPEN_PATH_MAX];
+    uint32_t resolved_len = 0U;
     struct kfile file;
     uint32_t fd = 0;
     int rc;
@@ -238,14 +437,14 @@ static uint32_t sys_open(struct syscall_saved_regs *regs) {
     if (!sched_current_task_is_user()) {
         return syscall_ret_err(KERR_NOTSUP);
     }
-    if (path_len == 0U || path_len >= SYSCALL_OPEN_PATH_MAX) {
-        return syscall_ret_err(KERR_INVAL);
-    }
-    rc = uaccess_copy_from_user(path, path_ptr, path_len);
+    rc = syscall_copy_user_path_raw(path_ptr, path_len, raw_path, sizeof(raw_path));
     if (rc < 0) {
         return syscall_ret_err(-rc);
     }
-    path[path_len] = '\0';
+    rc = syscall_resolve_path_raw(raw_path, path_len, path, sizeof(path), &resolved_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
 
     rc = vfs_open(path, open_flags, &file);
     if (rc < 0) {
@@ -257,6 +456,7 @@ static uint32_t sys_open(struct syscall_saved_regs *regs) {
         kfile_close(&file);
         return syscall_ret_err(-rc);
     }
+    (void)kfile_close(&file);
 
     KLOGI("sys_open: pid=%d task=%s fd=%u path=%s flags=%x",
           sched_current_task_pid(),
@@ -282,6 +482,114 @@ static uint32_t sys_close(struct syscall_saved_regs *regs) {
     return 0;
 }
 
+static uint32_t sys_pipe(struct syscall_saved_regs *regs) {
+    uint32_t pair_ptr = regs->ebx;
+    struct kfile read_end;
+    struct kfile write_end;
+    uint32_t fds[2];
+    int32_t user_fds[2];
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+    if (!uaccess_user_range_ok(pair_ptr, (uint32_t)sizeof(user_fds))) {
+        return syscall_ret_err(KERR_FAULT);
+    }
+
+    rc = kpipe_create(&read_end, &write_end);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+
+    rc = sched_current_process_fd_alloc(&read_end, &fds[0], 0);
+    (void)kfile_close(&read_end);
+    if (rc < 0) {
+        (void)kfile_close(&write_end);
+        return syscall_ret_err(-rc);
+    }
+
+    rc = sched_current_process_fd_alloc(&write_end, &fds[1], 0);
+    (void)kfile_close(&write_end);
+    if (rc < 0) {
+        (void)sched_current_process_fd_close(fds[0]);
+        return syscall_ret_err(-rc);
+    }
+
+    user_fds[0] = (int32_t)fds[0];
+    user_fds[1] = (int32_t)fds[1];
+    rc = uaccess_copy_to_user(pair_ptr, user_fds, (uint32_t)sizeof(user_fds));
+    if (rc < 0) {
+        (void)sched_current_process_fd_close(fds[0]);
+        (void)sched_current_process_fd_close(fds[1]);
+        return syscall_ret_err(-rc);
+    }
+    return 0;
+}
+
+static uint32_t sys_dup(struct syscall_saved_regs *regs) {
+    uint32_t oldfd = regs->ebx;
+    struct kfile *src = 0;
+    uint32_t newfd = 0;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+    rc = syscall_kfile_for_dup(oldfd, &src);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    rc = sched_current_process_fd_dup(oldfd, &newfd, 0);
+    if (rc < 0) {
+        if (oldfd <= SYSCALL_FD_STDERR) {
+            struct kfile *file = 0;
+            rc = sched_current_process_fd_alloc(src, &newfd, &file);
+            if (rc < 0) {
+                return syscall_ret_err(-rc);
+            }
+            return newfd;
+        }
+        return syscall_ret_err(-rc);
+    }
+    return newfd;
+}
+
+static uint32_t sys_dup2(struct syscall_saved_regs *regs) {
+    uint32_t oldfd = regs->ebx;
+    uint32_t newfd = regs->ecx;
+    struct kfile *src = 0;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = syscall_kfile_for_dup(oldfd, &src);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+
+    if (oldfd == newfd) {
+        return newfd;
+    }
+
+    if (newfd <= SYSCALL_FD_STDERR) {
+        (void)sched_current_process_fd_close(newfd);
+        rc = sched_current_process_fd_install(newfd, src, 0);
+        if (rc < 0) {
+            return syscall_ret_err(-rc);
+        }
+        return newfd;
+    }
+
+    rc = sched_current_process_fd_dup2(oldfd, newfd, 0);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return newfd;
+}
+
 static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     int target_pid = (int)regs->ebx;
     uint32_t status_ptr = regs->ecx;
@@ -289,7 +597,7 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     int parent_pid;
     int waited_pid;
     int32_t waited_exit = 0;
-    int handed_off_stdin = 0;
+    int restore_stdin = 0;
     int rc;
 
     if (!sched_current_task_is_user()) {
@@ -306,15 +614,18 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     parent_pid = sched_current_task_pid();
     if (target_pid > 0 &&
         parent_pid > 0 &&
-        vfs_console_input_owner_is_task(parent_pid) &&
         sched_current_task_owns_child_pid(target_pid)) {
-        if (vfs_console_set_input_owner_task(target_pid) == 0) {
-            handed_off_stdin = 1;
+        if (vfs_console_input_owner_is_task(parent_pid)) {
+            if (vfs_console_set_input_owner_task(target_pid) == 0) {
+                restore_stdin = 1;
+            }
+        } else if (vfs_console_input_owner_is_task(target_pid)) {
+            restore_stdin = 1;
         }
     }
 
     rc = sched_waitpid(target_pid, &waited_pid, &waited_exit);
-    if (handed_off_stdin) {
+    if (restore_stdin) {
         (void)vfs_console_set_input_owner_task(parent_pid);
     }
     if (rc < 0) {
@@ -334,6 +645,60 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
           waited_pid,
           waited_exit);
     return (uint32_t)waited_pid;
+}
+
+static uint32_t sys_chdir(struct syscall_saved_regs *regs) {
+    uint32_t path_ptr = regs->ebx;
+    uint32_t path_len = regs->ecx;
+    char raw_path[SYSCALL_CWD_MAX];
+    char path[SYSCALL_CWD_MAX];
+    uint32_t resolved_len = 0U;
+    struct vfs_node *node = 0;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = syscall_copy_user_path_raw(path_ptr, path_len, raw_path, sizeof(raw_path));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    rc = syscall_resolve_path_raw(raw_path, path_len, path, sizeof(path), &resolved_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+
+    rc = vfs_lookup(path, &node);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    if (!node || node->type != VFS_NODE_DIR) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = sched_set_current_task_cwd(path, resolved_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 0;
+}
+
+static uint32_t sys_getcwd(struct syscall_saved_regs *regs) {
+    uint32_t dst_ptr = regs->ebx;
+    uint32_t dst_len = regs->ecx;
+    uint32_t copied_len = 0U;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = sched_copy_current_task_cwd_to_user(dst_ptr, dst_len, &copied_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return copied_len;
 }
 
 static uint32_t sys_task_snapshot(struct syscall_saved_regs *regs) {
@@ -366,6 +731,66 @@ static uint32_t sys_task_snapshot(struct syscall_saved_regs *regs) {
     if (count != 0U) {
         copy_bytes = count * (uint32_t)sizeof(snapshot[0]);
         rc = uaccess_copy_to_user(entries_ptr, snapshot, copy_bytes);
+        if (rc < 0) {
+            return syscall_ret_err(-rc);
+        }
+    }
+
+    return count;
+}
+
+static uint32_t sys_list_dir(struct syscall_saved_regs *regs) {
+    uint32_t req_ptr = regs->ebx;
+    struct syscall_list_dir_req req;
+    char raw_path[SYSCALL_LIST_DIR_PATH_MAX];
+    char path[SYSCALL_LIST_DIR_PATH_MAX];
+    struct vfs_dir_entry kernel_entries[SYSCALL_LIST_DIR_MAX];
+    struct syscall_dir_entry user_entries[SYSCALL_LIST_DIR_MAX];
+    uint32_t capped_cap;
+    uint32_t count = 0U;
+    uint32_t resolved_len = 0U;
+    uint32_t copy_bytes = 0U;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = uaccess_copy_from_user(&req, req_ptr, (uint32_t)sizeof(req));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    capped_cap = req.entry_cap;
+    if (capped_cap > SYSCALL_LIST_DIR_MAX) {
+        capped_cap = SYSCALL_LIST_DIR_MAX;
+    }
+    if (capped_cap != 0U) {
+        copy_bytes = capped_cap * (uint32_t)sizeof(user_entries[0]);
+        if (req.entries_ptr == 0U || !uaccess_user_range_ok(req.entries_ptr, copy_bytes)) {
+            return syscall_ret_err(KERR_FAULT);
+        }
+    }
+
+    rc = syscall_copy_user_path_raw(req.path_ptr, req.path_len, raw_path, sizeof(raw_path));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    rc = syscall_resolve_path_raw(raw_path, req.path_len, path, sizeof(path), &resolved_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+
+    rc = vfs_list_dir(path, kernel_entries, capped_cap, &count);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        user_entries[i].type = kernel_entries[i].type;
+        memcpy(user_entries[i].name, kernel_entries[i].name, sizeof(user_entries[i].name));
+    }
+    if (count != 0U) {
+        copy_bytes = count * (uint32_t)sizeof(user_entries[0]);
+        rc = uaccess_copy_to_user(req.entries_ptr, user_entries, copy_bytes);
         if (rc < 0) {
             return syscall_ret_err(-rc);
         }
@@ -482,6 +907,18 @@ uint32_t syscall_dispatch(struct syscall_saved_regs *regs) {
             return sys_time_info(regs);
         case SYS_GETCMDLINE:
             return sys_getcmdline(regs);
+        case SYS_LIST_DIR:
+            return sys_list_dir(regs);
+        case SYS_CHDIR:
+            return sys_chdir(regs);
+        case SYS_GETCWD:
+            return sys_getcwd(regs);
+        case SYS_PIPE:
+            return sys_pipe(regs);
+        case SYS_DUP:
+            return sys_dup(regs);
+        case SYS_DUP2:
+            return sys_dup2(regs);
         default:
             KLOGW("syscall: unknown nr=%u ebx=%x ecx=%x edx=%x",
                   regs->eax, regs->ebx, regs->ecx, regs->edx);

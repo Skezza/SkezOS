@@ -24,7 +24,10 @@ int usermode_spawn_shell_task(void);
  * Returns child pid (>0) on success or negative -KERR_* on failure.
  */
 int usermode_spawn_path_task(const char *path);
-int usermode_spawn_path_task_ex(const char *path, const char *cmdline, uint32_t cmdline_len);
+int usermode_spawn_path_task_ex(const char *path,
+                                const char *cmdline,
+                                uint32_t cmdline_len,
+                                uint32_t spawn_flags);
 
 /* Scheduler callback used to release bootstrap spawn slots on task reap. */
 void usermode_notify_task_reaped(const char *task_name);

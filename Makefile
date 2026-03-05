@@ -18,7 +18,8 @@ LDFLAGS = -m elf_i386
 BUILD = build
 ISO   = skezos.iso
 SMOKE_LOG = $(BUILD)/qemu-smoke.log
-SMOKE_TIMEOUT_SECS ?= 8
+SMOKE_TIMEOUT_SECS ?= 18
+SHELL_SMOKE_TIMEOUT_SECS ?= 35
 SMOKE_MARKER = SKEZOS_SMOKE_READY
 PHASE4_REPEAT ?= 3
 USERLAND_BUILD = $(BUILD)/userland
@@ -43,7 +44,12 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/echo_slot6.o \
 	$(USERLAND_BUILD)/readln_slot7.o \
 	$(USERLAND_BUILD)/uptime_slot8.o \
-	$(USERLAND_BUILD)/sleep_slot9.o
+	$(USERLAND_BUILD)/sleep_slot9.o \
+	$(USERLAND_BUILD)/diag_slot10.o \
+	$(USERLAND_BUILD)/fault_slot11.o \
+	$(USERLAND_BUILD)/pwd_slot12.o \
+	$(USERLAND_BUILD)/ls_slot13.o \
+	$(USERLAND_BUILD)/busybox_slot14.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -55,9 +61,14 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/echo.elf \
 	$(USERLAND_BUILD)/readln.elf \
 	$(USERLAND_BUILD)/uptime.elf \
-	$(USERLAND_BUILD)/sleep.elf
+	$(USERLAND_BUILD)/sleep.elf \
+	$(USERLAND_BUILD)/diag.elf \
+	$(USERLAND_BUILD)/fault.elf \
+	$(USERLAND_BUILD)/pwd.elf \
+	$(USERLAND_BUILD)/ls.elf \
+	$(USERLAND_BUILD)/busybox.elf
 
-.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-phase5 qemu-smoke-phase6 check
+.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-phase5 qemu-smoke-shell-core qemu-smoke-reliability check
 
 all: $(ISO)
 
@@ -115,6 +126,21 @@ $(USERLAND_BUILD)/uptime.elf: $(USERLAND_BUILD)/uptime_slot8.o
 $(USERLAND_BUILD)/sleep.elf: $(USERLAND_BUILD)/sleep_slot9.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x014AB000 -o $@ $<
 
+$(USERLAND_BUILD)/diag.elf: $(USERLAND_BUILD)/diag_slot10.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x014BC000 -o $@ $<
+
+$(USERLAND_BUILD)/fault.elf: $(USERLAND_BUILD)/fault_slot11.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x014CD000 -o $@ $<
+
+$(USERLAND_BUILD)/pwd.elf: $(USERLAND_BUILD)/pwd_slot12.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x014DE000 -o $@ $<
+
+$(USERLAND_BUILD)/ls.elf: $(USERLAND_BUILD)/ls_slot13.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x014EF000 -o $@ $<
+
+$(USERLAND_BUILD)/busybox.elf: $(USERLAND_BUILD)/busybox_slot14.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01500000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -128,6 +154,11 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/readln.elf $(INITRAMFS_STAGING)/bin/readln.elf
 	cp $(USERLAND_BUILD)/uptime.elf $(INITRAMFS_STAGING)/bin/uptime.elf
 	cp $(USERLAND_BUILD)/sleep.elf $(INITRAMFS_STAGING)/bin/sleep.elf
+	cp $(USERLAND_BUILD)/diag.elf $(INITRAMFS_STAGING)/bin/diag.elf
+	cp $(USERLAND_BUILD)/fault.elf $(INITRAMFS_STAGING)/bin/fault.elf
+	cp $(USERLAND_BUILD)/pwd.elf $(INITRAMFS_STAGING)/bin/pwd.elf
+	cp $(USERLAND_BUILD)/ls.elf $(INITRAMFS_STAGING)/bin/ls.elf
+	cp $(USERLAND_BUILD)/busybox.elf $(INITRAMFS_STAGING)/bin/busybox.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -169,7 +200,7 @@ qemu-smoke: $(ISO)
 	@rm -f $(SMOKE_LOG)
 	@echo "[qemu-smoke] Booting headless VM for up to $(SMOKE_TIMEOUT_SECS)s..."
 	@rc=0; \
-	timeout -s INT -k 2s $(SMOKE_TIMEOUT_SECS)s $(QEMU) \
+	timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \
 		-cdrom $(ISO) \
 		-display none \
 		-serial file:$(SMOKE_LOG) \
@@ -187,21 +218,50 @@ qemu-smoke: $(ISO)
 	fi; \
 	echo "[qemu-smoke] PASS"
 
-qemu-smoke-userfault:
-	@$(MAKE) qemu-smoke SMOKE_LOG=$(BUILD)/qemu-smoke-userfault.log
+qemu-smoke-userfault: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-userfault.log
+	@echo "[qemu-smoke-userfault] Booting headless VM with scripted fault trigger..."
+	@rc=0; \
+	{ sleep 9; \
+		printf 'fault\n'; \
+		sleep 0.25; \
+		printf 'exit\n'; \
+	} | \
+	timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \
+		-cdrom $(ISO) \
+		-display none \
+		-serial mon:stdio \
+		-monitor none \
+		-no-reboot \
+		-no-shutdown > $(BUILD)/qemu-smoke-userfault.log 2>&1 || rc=$$?; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
+		echo "[qemu-smoke-userfault] QEMU failed (exit $$rc)."; \
+		exit $$rc; \
+	fi
+	@if ! grep -Fq "$(SMOKE_MARKER)" $(BUILD)/qemu-smoke-userfault.log; then \
+		echo "[qemu-smoke-userfault] Missing readiness marker: $(SMOKE_MARKER)"; \
+		tail -n 120 $(BUILD)/qemu-smoke-userfault.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "fault: triggering user page fault" $(BUILD)/qemu-smoke-userfault.log; then \
+		echo "[qemu-smoke-userfault] Missing fault trigger output"; \
+		tail -n 120 $(BUILD)/qemu-smoke-userfault.log; \
+		exit 1; \
+	fi
 	@if ! grep -Fq "user page fault:" $(BUILD)/qemu-smoke-userfault.log; then \
 		echo "[qemu-smoke-userfault] Missing user page fault log"; \
-		tail -n 80 $(BUILD)/qemu-smoke-userfault.log; \
-		exit 1; \
-	fi
-	@if ! grep -Fq "name=user-fault" $(BUILD)/qemu-smoke-userfault.log; then \
-		echo "[qemu-smoke-userfault] Missing user-fault task termination log"; \
-		tail -n 80 $(BUILD)/qemu-smoke-userfault.log; \
-		exit 1; \
-	fi
-	@if ! awk 'BEGIN{pf=0;post=0} /user page fault:/{pf=1} pf && ($$0 ~ /sched demo:/ || $$0 ~ /idle heartbeat/ || $$0 ~ /sched: task start/ || $$0 ~ /sys_exit:/){post=1} END{exit (pf && post) ? 0 : 1}' $(BUILD)/qemu-smoke-userfault.log; then \
-		echo "[qemu-smoke-userfault] No scheduler progress observed after user fault"; \
 		tail -n 120 $(BUILD)/qemu-smoke-userfault.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "fault recovery: terminating user task pid=" $(BUILD)/qemu-smoke-userfault.log; then \
+		echo "[qemu-smoke-userfault] Missing task termination log"; \
+		tail -n 120 $(BUILD)/qemu-smoke-userfault.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "task=user-shell waited_pid=" $(BUILD)/qemu-smoke-userfault.log; then \
+		echo "[qemu-smoke-userfault] Missing shell waitpid recovery log"; \
+		tail -n 160 $(BUILD)/qemu-smoke-userfault.log; \
 		exit 1; \
 	fi
 	@echo "[qemu-smoke-userfault] PASS"
@@ -323,122 +383,273 @@ qemu-smoke-phase5:
 	fi
 	@echo "[qemu-smoke-phase5] PASS"
 
-qemu-smoke-phase6:
-	@$(MAKE) qemu-smoke-phase5
+define SHELL_CORE_SMOKE_SCRIPT
+printf 'pwd\n'; \
+sleep 0.25; \
+printf 'cd /bin\n'; \
+sleep 0.25; \
+printf 'pwd\n'; \
+sleep 0.25; \
+printf 'ls\n'; \
+sleep 0.25; \
+printf './busybox echo via busybox\n'; \
+sleep 0.25; \
+printf './busybox pwd\n'; \
+sleep 0.25; \
+printf 'readlq\177n\n'; \
+sleep 0.75; \
+printf 'stdin handoff worzz\b\bks\n'; \
+sleep 0.25; \
+printf 'ps\n'; \
+sleep 0.25; \
+printf 'echo shell core interactive echo\n'; \
+sleep 0.25; \
+printf 'cat readme.txt\n'; \
+sleep 0.25; \
+printf 'missing\n'; \
+sleep 0.25; \
+printf 'exit\n';
+endef
+
+define RELIABILITY_SMOKE_SCRIPT
+printf 'cd /\n'; \
+sleep 0.25; \
+printf 'echo hello > test.txt\n'; \
+sleep 0.25; \
+printf 'cat /test.txt\n'; \
+sleep 0.25; \
+printf 'cd /bin\n'; \
+sleep 0.25; \
+printf 'uptime\n'; \
+sleep 0.25; \
+printf 'sleep 2\n'; \
+sleep 0.25; \
+printf 'echo pipeline smoke | cat\n'; \
+sleep 0.25; \
+printf 'cat < readme.txt | cat | cat\n'; \
+sleep 0.25; \
+printf 'echo drop-me > /dev/null\n'; \
+sleep 0.25; \
+printf 'echo reliability-v1 > /reliability.txt\n'; \
+sleep 0.25; \
+printf 'echo reliability-v2 >> /reliability.txt\n'; \
+sleep 0.25; \
+printf 'cat /reliability.txt\n'; \
+sleep 0.25; \
+printf 'echo should-fail > /bin/readme.txt\n'; \
+sleep 0.25; \
+printf 'pwd | cat\n'; \
+sleep 0.25; \
+printf 'diag\n'; \
+sleep 0.25; \
+printf 'exit\n';
+endef
+
+define RUN_SCRIPTED_SHELL_SMOKE
+@rc=0; \
+{ sleep 12; \
+$(3) \
+} | \
+timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \
+	-cdrom $(ISO) \
+	-display none \
+	-serial mon:stdio \
+	-monitor none \
+	-no-reboot \
+	-no-shutdown > $(2) 2>&1 || rc=$$?; \
+if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
+	echo "[$(1)] QEMU failed (exit $$rc)."; \
+	exit $$rc; \
+fi
+endef
+
+define ASSERT_SHELL_BOOT_READY
+@if ! grep -Fq "$(SMOKE_MARKER)" $(2); then \
+	echo "[$(1)] Missing readiness marker: $(SMOKE_MARKER)"; \
+	tail -n 220 $(2); \
+	exit 1; \
+fi
+@if ! grep -Fq "SkezOS shell ready" $(2); then \
+	echo "[$(1)] Missing shell bootstrap banner"; \
+	tail -n 220 $(2); \
+	exit 1; \
+fi
+endef
+
+qemu-smoke-shell-core: $(ISO)
 	@mkdir -p $(BUILD)
-	@rm -f $(BUILD)/qemu-smoke-phase6.log
-	@echo "[qemu-smoke-phase6] Booting headless VM with scripted shell input..."
-	@rc=0; \
-	{ sleep 5; \
-		printf 'helx\177p\n'; \
-		sleep 0.25; \
-		printf 'readlq\177n\n'; \
-		sleep 0.25; \
-		printf 'stdin handoff worzz\177\177ks\n'; \
-		sleep 0.25; \
-		printf 'ps\n'; \
-		sleep 0.25; \
-		printf 'uptime\n'; \
-		sleep 0.25; \
-		printf 'sleep 2\n'; \
-		sleep 0.25; \
-		printf 'echo phase6 interactive echo\n'; \
-		sleep 0.25; \
-		printf 'cat readme.txt\n'; \
-		sleep 0.25; \
-		printf 'missing\n'; \
-		sleep 0.25; \
-		printf 'exit\n'; \
-	} | \
-	timeout -s INT -k 2s $(SMOKE_TIMEOUT_SECS)s $(QEMU) \
-		-cdrom $(ISO) \
-		-display none \
-		-serial mon:stdio \
-		-monitor none \
-		-no-reboot \
-		-no-shutdown > $(BUILD)/qemu-smoke-phase6.log 2>&1 || rc=$$?; \
-	if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
-		echo "[qemu-smoke-phase6] QEMU failed (exit $$rc)."; \
-		exit $$rc; \
-	fi
-	@if ! grep -Fq "$(SMOKE_MARKER)" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing readiness marker: $(SMOKE_MARKER)"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@rm -f $(BUILD)/qemu-smoke-shell-core.log
+	@echo "[qemu-smoke-shell-core] Booting headless VM with scripted shell input..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log,$(SHELL_CORE_SMOKE_SCRIPT))
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log)
+	@if ! awk 'BEGIN{in_shell=0;bad=0} /SkezOS shell ready/{in_shell=1} /sh: exit/{in_shell=0} in_shell && /sched demo:/{bad=1} END{exit bad ? 1 : 0}' $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Unexpected worker demo log spam while shell was active"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sh: bootstrap shell online" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing shell bootstrap banner"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if [ "$$(grep -Fo 'sh> ' $(BUILD)/qemu-smoke-shell-core.log | wc -l)" -lt 11 ]; then \
+		echo "[qemu-smoke-shell-core] Missing repeated shell prompts"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! awk 'BEGIN{in_shell=0;bad=0} /sh: bootstrap shell online/{in_shell=1} /sh: bootstrap shell exit/{in_shell=0} in_shell && /sched demo:/{bad=1} END{exit bad ? 1 : 0}' $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Unexpected worker demo log spam while shell was active"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "/"; then \
+		echo "[qemu-smoke-shell-core] Missing root pwd output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fo 'sh> ' $(BUILD)/qemu-smoke-phase6.log | wc -l)" -lt 7 ]; then \
-		echo "[qemu-smoke-phase6] Missing repeated shell prompts"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "/bin"; then \
+		echo "[qemu-smoke-shell-core] Missing changed pwd output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sh: builtins help wait ps exit; external names map to /bin/<name>.elf" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing shell help output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! grep -Fq "busybox.elf" $(BUILD)/qemu-smoke-shell-core.log || ! grep -Fq "readme.txt" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing ls directory output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "readln: stdin handoff works" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing foreground stdin handoff output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if [ "$$(grep -Fc 'via busybox' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing busybox multicall output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "ps: pid=" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing ps task snapshot output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if [ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxc '/bin')" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing inherited child cwd output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "uptime: ticks_hi=" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing uptime output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! grep -Fq "readln: stdin handoff works" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing foreground stdin handoff output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sleep: requested=2 elapsed=" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing sleep output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! grep -Fq "PID  PPID  MODE" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing ps task snapshot output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fc 'phase6 interactive echo' $(BUILD)/qemu-smoke-phase6.log)" -lt 2 ]; then \
-		echo "[qemu-smoke-phase6] Missing echo output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if [ "$$(grep -Fc 'shell core interactive echo' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing echo output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "cat: SkezOS tarfs demo" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing cat output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! grep -Fq "SkezOS tarfs demo" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing cat output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sh: command failed" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing unknown-command failure output"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! grep -Fq "run: launch failed" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing unknown-command failure output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sys_waitpid: parent_pid=" $(BUILD)/qemu-smoke-phase6.log || ! grep -Fq "task=user-shell waited_pid=" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing user-shell waitpid log"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! grep -Fq "sys_waitpid: parent_pid=" $(BUILD)/qemu-smoke-shell-core.log || ! grep -Fq "task=user-shell waited_pid=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing user-shell waitpid log"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "sh: bootstrap shell exit" $(BUILD)/qemu-smoke-phase6.log; then \
-		echo "[qemu-smoke-phase6] Missing shell exit line"; \
-		tail -n 220 $(BUILD)/qemu-smoke-phase6.log; \
+	@if ! grep -Fq "sh: exit" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing shell exit line"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@echo "[qemu-smoke-phase6] PASS (interactive shell)"
+	@echo "[qemu-smoke-shell-core] PASS (interactive shell)"
+
+
+qemu-smoke-reliability: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-reliability.log
+	@echo "[qemu-smoke-reliability] Booting headless VM with scripted reliability input..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-reliability,$(BUILD)/qemu-smoke-reliability.log,$(RELIABILITY_SMOKE_SCRIPT))
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability,$(BUILD)/qemu-smoke-reliability.log)
+	@if ! grep -Fq "uptime: " $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing uptime output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sleep: requested=2 observed=" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing sleep output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "pipeline smoke" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing basic pipe output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'SkezOS tarfs demo' $(BUILD)/qemu-smoke-reliability.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-reliability] Missing redirected pipeline cat output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-reliability.log | grep -Fxq "hello"; then \
+		echo "[qemu-smoke-reliability] Missing root redirect round-trip output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-reliability.log | grep -Fxq "reliability-v1"; then \
+		echo "[qemu-smoke-reliability] Missing redirect create output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-reliability.log | grep -Fxq "reliability-v2"; then \
+		echo "[qemu-smoke-reliability] Missing redirect append output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'run: redirect open failed' $(BUILD)/qemu-smoke-reliability.log)" -ne 1 ]; then \
+		echo "[qemu-smoke-reliability] Unexpected redirect failure count"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "run: builtin does not support pipes/redirection" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing builtin pipeline rejection output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: pipe bad ptr ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag pipe bad-pointer check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: dup invalid fd ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag dup invalid-fd check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: dup2 invalid target fd ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag dup2 invalid-target check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: pipe eof after writer close ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag pipe EOF check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: pipe broken write ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag broken-pipe check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: PASS" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag syscall self-check output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sh: exit" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing shell exit line"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-reliability] PASS"
 
 check:
 	@$(MAKE) toolchain-check
 	@$(MAKE) clean
 	@$(MAKE) all
 	@$(MAKE) qemu-smoke-userfault
-	@$(MAKE) qemu-smoke-phase6
+	@$(MAKE) qemu-smoke-shell-core
+	@$(MAKE) qemu-smoke-reliability
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.elf

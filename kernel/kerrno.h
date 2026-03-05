@@ -9,6 +9,7 @@ enum {
     KERR_INVAL  = 22,
     KERR_NOMEM  = 12,
     KERR_FAULT  = 14,
+    KERR_PIPE   = 32,
     KERR_NOTSUP = 95,
 };
 

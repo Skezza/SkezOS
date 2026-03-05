@@ -17,6 +17,7 @@
 #define SCHED_MAX_TASKS         12
 #define SCHED_TASK_NAME_MAX     16
 #define SCHED_CMDLINE_MAX       128U
+#define SCHED_CWD_MAX           SYSCALL_CWD_MAX
 #define SCHED_DEFAULT_STACK     (16U * 1024U)
 #define SCHED_DEFAULT_TIMESLICE 5U
 #define SCHED_WAIT_ANY_CHILD    (-1)
@@ -50,6 +51,8 @@ struct task_user_ctx {
     uint32_t fault_count;
     uint32_t cmdline_len;
     char cmdline[SCHED_CMDLINE_MAX];
+    uint32_t cwd_len;
+    char cwd[SCHED_CWD_MAX];
     int32_t exit_code;
     int exit_code_valid;
 };
@@ -104,6 +107,7 @@ static int sched_spawn_task_internal(const char *name,
                                      void *arg,
                                      uint32_t stack_size,
                                      int parent_pid,
+                                     int inherit_fds,
                                      int *out_pid);
 static void sched_copy_task_name(char *dst, const char *src);
 static struct task *sched_find_task_by_pid_locked(int pid);
@@ -121,6 +125,7 @@ static int sched_ranges_overlap(uint32_t base_a,
                                 uint32_t base_b,
                                 uint32_t size_b);
 static uint32_t sched_state_to_syscall_state(task_state_t state);
+static void sched_init_task_cwd(struct task *task);
 
 static void sched_panic_unexpected_return(void) {
     KLOGP("scheduler returned to unexpected context");
@@ -329,6 +334,15 @@ static uint32_t sched_state_to_syscall_state(task_state_t state) {
     }
 }
 
+static void sched_init_task_cwd(struct task *task) {
+    if (!task) {
+        return;
+    }
+    task->user.cwd_len = 1U;
+    task->user.cwd[0] = '/';
+    task->user.cwd[1] = '\0';
+}
+
 static struct task *sched_find_task_slot(void) {
     for (uint32_t i = 0; i < SCHED_MAX_TASKS; i++) {
         if (g_tasks[i].state == TASK_UNUSED) {
@@ -468,12 +482,12 @@ static void sched_init_task_stack(struct task *task) {
 static void sched_idle_task(void *arg) {
     (void)arg;
     uint32_t last_report = 0;
-    KLOGI("sched: idle task online");
+    //KLOGI("sched: idle task online");
     for (;;) {
         uint32_t now = (uint32_t)timer_ticks;
         if ((uint32_t)(now - last_report) >= 500U) {
             last_report = now;
-            KLOGI("sched: idle heartbeat tick=%u idle_ticks=%u", now, g_idle_ticks);
+            //KLOGI("sched: idle heartbeat tick=%u idle_ticks=%u", now, g_idle_ticks);
         }
         sched_checkpoint();
         __asm__ __volatile__("hlt");
@@ -508,6 +522,7 @@ static int sched_spawn_task_internal(const char *name,
                                      void *arg,
                                      uint32_t stack_size,
                                      int parent_pid,
+                                     int inherit_fds,
                                      int *out_pid) {
     struct task *task;
     uint8_t *stack;
@@ -547,6 +562,25 @@ static int sched_spawn_task_internal(const char *name,
     task->arg = arg;
     task->timeslice_left = SCHED_DEFAULT_TIMESLICE;
     proc_fd_table_init(&task->fd_table);
+    sched_init_task_cwd(task);
+    if (parent_pid > 0 &&
+        g_current_task &&
+        g_current_task->pid == parent_pid &&
+        g_current_task->exec_mode == TASK_EXEC_USER_BOOTSTRAP) {
+        task->user.cwd_len = g_current_task->user.cwd_len;
+        memcpy(task->user.cwd, g_current_task->user.cwd, task->user.cwd_len + 1U);
+        if (inherit_fds) {
+            int clone_rc = proc_fd_table_clone(&task->fd_table, &g_current_task->fd_table);
+            if (clone_rc < 0) {
+                kfree(stack);
+                memset(task, 0, sizeof(*task));
+                task->state = TASK_UNUSED;
+                task->parent_pid = -1;
+                proc_fd_table_init(&task->fd_table);
+                return clone_rc;
+            }
+        }
+    }
     sched_init_task_stack(task);
 
     KLOGI("sched: task created pid=%d name=%s stack=%u bytes state=%s",
@@ -558,13 +592,14 @@ static int sched_spawn_task_internal(const char *name,
 }
 
 int sched_spawn_kernel_task(const char *name, sched_task_entry_t entry, void *arg, uint32_t stack_size) {
-    return sched_spawn_task_internal(name, entry, arg, stack_size, -1, 0);
+    return sched_spawn_task_internal(name, entry, arg, stack_size, -1, 0, 0);
 }
 
 int sched_spawn_user_child_task(const char *name,
                                 sched_task_entry_t entry,
                                 void *arg,
                                 uint32_t stack_size,
+                                int inherit_fds,
                                 int *out_pid) {
     if (!g_current_task || !sched_current_task_is_user()) {
         return -KERR_NOTSUP;
@@ -572,7 +607,13 @@ int sched_spawn_user_child_task(const char *name,
     if (!out_pid) {
         return -KERR_INVAL;
     }
-    return sched_spawn_task_internal(name, entry, arg, stack_size, g_current_task->pid, out_pid);
+    return sched_spawn_task_internal(name,
+                                     entry,
+                                     arg,
+                                     stack_size,
+                                     g_current_task->pid,
+                                     inherit_fds,
+                                     out_pid);
 }
 
 int sched_mark_current_task_user_bootstrap(uint32_t user_eip, uint32_t user_esp) {
@@ -682,6 +723,83 @@ int sched_copy_current_task_cmdline_to_user(uint32_t dst_addr, uint32_t dst_len,
         memcpy((void *)(uintptr_t)dst_addr, task->user.cmdline, copy_len);
     }
     ((char *)(uintptr_t)dst_addr)[copy_len] = '\0';
+    *out_len = copy_len;
+    return 0;
+}
+
+int sched_set_current_task_cwd(const char *src, uint32_t len) {
+    struct task *task = g_current_task;
+    uint32_t copy_len;
+
+    if (!task) {
+        return -KERR_INVAL;
+    }
+    if (!src || len == 0U) {
+        return -KERR_INVAL;
+    }
+    if (len >= SCHED_CWD_MAX) {
+        return -KERR_INVAL;
+    }
+
+    copy_len = len;
+    memcpy(task->user.cwd, src, copy_len);
+    task->user.cwd[copy_len] = '\0';
+    task->user.cwd_len = copy_len;
+    return 0;
+}
+
+int sched_copy_current_task_cwd_to_user(uint32_t dst_addr, uint32_t dst_len, uint32_t *out_len) {
+    struct task *task = g_current_task;
+    uint32_t copy_len = 0U;
+
+    if (!out_len) {
+        return -KERR_INVAL;
+    }
+    *out_len = 0U;
+    if (!task || task->exec_mode != TASK_EXEC_USER_BOOTSTRAP) {
+        return -KERR_NOTSUP;
+    }
+    if (dst_len == 0U) {
+        return 0;
+    }
+    if (!sched_current_user_range_ok(dst_addr, dst_len)) {
+        return -KERR_FAULT;
+    }
+
+    if (task->user.cwd_len < (dst_len - 1U)) {
+        copy_len = task->user.cwd_len;
+    } else {
+        copy_len = dst_len - 1U;
+    }
+    if (copy_len != 0U) {
+        memcpy((void *)(uintptr_t)dst_addr, task->user.cwd, copy_len);
+    }
+    ((char *)(uintptr_t)dst_addr)[copy_len] = '\0';
+    *out_len = copy_len;
+    return 0;
+}
+
+int sched_copy_current_task_cwd(char *dst, uint32_t dst_cap, uint32_t *out_len) {
+    struct task *task = g_current_task;
+    uint32_t copy_len;
+
+    if (!dst || dst_cap == 0U || !out_len) {
+        return -KERR_INVAL;
+    }
+    *out_len = 0U;
+    if (!task || task->exec_mode != TASK_EXEC_USER_BOOTSTRAP) {
+        return -KERR_NOTSUP;
+    }
+
+    if (task->user.cwd_len < (dst_cap - 1U)) {
+        copy_len = task->user.cwd_len;
+    } else {
+        copy_len = dst_cap - 1U;
+    }
+    if (copy_len != 0U) {
+        memcpy(dst, task->user.cwd, copy_len);
+    }
+    dst[copy_len] = '\0';
     *out_len = copy_len;
     return 0;
 }
@@ -883,6 +1001,40 @@ int sched_current_process_fd_close(uint32_t fd) {
         return -KERR_NOTSUP;
     }
     return proc_fd_close(&g_current_task->fd_table, fd);
+}
+
+int sched_current_process_fd_dup(uint32_t oldfd, uint32_t *out_newfd, struct kfile **out_file) {
+    if (!out_newfd) {
+        return -KERR_INVAL;
+    }
+    *out_newfd = 0;
+    if (out_file) {
+        *out_file = 0;
+    }
+    if (!g_current_task) {
+        return -KERR_INVAL;
+    }
+    if (!sched_current_task_is_user()) {
+        return -KERR_NOTSUP;
+    }
+    return proc_fd_dup(&g_current_task->fd_table,
+                       oldfd,
+                       PROC_FD_DYNAMIC_MIN,
+                       out_newfd,
+                       out_file);
+}
+
+int sched_current_process_fd_dup2(uint32_t oldfd, uint32_t newfd, struct kfile **out_file) {
+    if (out_file) {
+        *out_file = 0;
+    }
+    if (!g_current_task) {
+        return -KERR_INVAL;
+    }
+    if (!sched_current_task_is_user()) {
+        return -KERR_NOTSUP;
+    }
+    return proc_fd_dup2(&g_current_task->fd_table, oldfd, newfd, out_file);
 }
 
 int sched_waitpid(int target_pid, int *out_waited_pid, int32_t *out_exit_code) {

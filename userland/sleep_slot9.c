@@ -3,7 +3,8 @@
 #include "userlib.h"
 
 static const char kPrefix[] = "sleep: requested=";
-static const char kElapsed[] = " elapsed=";
+static const char kObserved[] = " observed=";
+static const char kTicksSuffix[] = " ticks";
 static const char kInvalidTicks[] = "sleep: invalid ticks\n";
 static const char kTimeFail[] = "sleep: time query failed\n";
 static const char kNewline[] = "\n";
@@ -100,8 +101,9 @@ void _start(int argc, char **argv) {
 
     sleep_write_str(USER_FD_STDOUT, kPrefix);
     sleep_write_u32(USER_FD_STDOUT, ticks);
-    sleep_write_str(USER_FD_STDOUT, kElapsed);
+    sleep_write_str(USER_FD_STDOUT, kObserved);
     sleep_write_u32(USER_FD_STDOUT, elapsed);
+    sleep_write_str(USER_FD_STDOUT, kTicksSuffix);
     sleep_write_all(USER_FD_STDOUT, kNewline, (uint32_t)(sizeof(kNewline) - 1U));
     user_exit(0);
 }

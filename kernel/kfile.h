@@ -8,11 +8,13 @@ struct kfile;
 
 typedef int (*kfile_read_fn_t)(struct kfile *file, void *buf, uint32_t len, uint32_t *out_read);
 typedef int (*kfile_write_fn_t)(struct kfile *file, const void *buf, uint32_t len, uint32_t *out_written);
+typedef int (*kfile_retain_fn_t)(struct kfile *file);
 typedef int (*kfile_close_fn_t)(struct kfile *file);
 
 struct kfile_ops {
     kfile_read_fn_t read;
     kfile_write_fn_t write;
+    kfile_retain_fn_t retain;
     kfile_close_fn_t close;
 };
 
@@ -37,6 +39,7 @@ void kfile_init(struct kfile *file,
 /* Dispatch helpers that normalize basic validation and -KERR_* errors. */
 int kfile_read(struct kfile *file, void *buf, uint32_t len, uint32_t *out_read);
 int kfile_write(struct kfile *file, const void *buf, uint32_t len, uint32_t *out_written);
+int kfile_clone(const struct kfile *src, struct kfile *dst);
 int kfile_close(struct kfile *file);
 
 #endif /* KFILE_H */

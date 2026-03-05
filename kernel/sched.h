@@ -27,6 +27,9 @@ int sched_set_current_user_layout(uint32_t image_base,
 int sched_current_user_range_ok(uint32_t addr, uint32_t len);
 int sched_set_current_task_cmdline(const char *src, uint32_t len);
 int sched_copy_current_task_cmdline_to_user(uint32_t dst_addr, uint32_t dst_len, uint32_t *out_len);
+int sched_set_current_task_cwd(const char *src, uint32_t len);
+int sched_copy_current_task_cwd_to_user(uint32_t dst_addr, uint32_t dst_len, uint32_t *out_len);
+int sched_copy_current_task_cwd(char *dst, uint32_t dst_cap, uint32_t *out_len);
 int sched_user_image_range_available(uint32_t image_base, uint32_t image_size);
 
 /* User-task diagnostics hooks used by the Phase 3 syscall/fault path. */
@@ -48,6 +51,8 @@ int sched_current_process_fd_get(uint32_t fd, struct kfile **out_file);
 int sched_current_process_fd_install(uint32_t fd, const struct kfile *src_file, struct kfile **out_file);
 int sched_current_process_fd_alloc(const struct kfile *src_file, uint32_t *out_fd, struct kfile **out_file);
 int sched_current_process_fd_close(uint32_t fd);
+int sched_current_process_fd_dup(uint32_t oldfd, uint32_t *out_newfd, struct kfile **out_file);
+int sched_current_process_fd_dup2(uint32_t oldfd, uint32_t newfd, struct kfile **out_file);
 
 /* Spawn a waitable child task owned by the current user task.
  * Returns 0 on success and writes child pid to OUT_PID.
@@ -56,6 +61,7 @@ int sched_spawn_user_child_task(const char *name,
                                 sched_task_entry_t entry,
                                 void *arg,
                                 uint32_t stack_size,
+                                int inherit_fds,
                                 int *out_pid);
 
 /* Wait for a child task to exit.

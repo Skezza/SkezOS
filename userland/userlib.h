@@ -73,6 +73,7 @@ static inline int32_t user_spawn_ex(const char *path,
     req.path_len = path_len;
     req.cmdline_ptr = cmdline_len == 0U ? 0U : (uint32_t)(uintptr_t)cmdline;
     req.cmdline_len = cmdline_len;
+    req.flags = SYSCALL_SPAWN_FLAG_INHERIT_FDS;
     return user_syscall1(SYS_SPAWN_EX, (uint32_t)(uintptr_t)&req);
 }
 
@@ -82,6 +83,18 @@ static inline int32_t user_open(const char *path, uint32_t path_len, uint32_t fl
 
 static inline int32_t user_close(uint32_t fd) {
     return user_syscall1(SYS_CLOSE, fd);
+}
+
+static inline int32_t user_pipe(int32_t fds[2]) {
+    return user_syscall1(SYS_PIPE, (uint32_t)(uintptr_t)fds);
+}
+
+static inline int32_t user_dup(uint32_t oldfd) {
+    return user_syscall1(SYS_DUP, oldfd);
+}
+
+static inline int32_t user_dup2(uint32_t oldfd, uint32_t newfd) {
+    return user_syscall2(SYS_DUP2, oldfd, newfd);
 }
 
 static inline int32_t user_waitpid(int32_t pid, int32_t *status, uint32_t options) {
@@ -104,6 +117,27 @@ static inline int32_t user_task_snapshot(struct syscall_task_snapshot_entry *ent
 
 static inline int32_t user_time_info(struct syscall_time_info *info) {
     return user_syscall1(SYS_TIME_INFO, (uint32_t)(uintptr_t)info);
+}
+
+static inline int32_t user_list_dir(const char *path,
+                                    uint32_t path_len,
+                                    struct syscall_dir_entry *entries,
+                                    uint32_t entry_cap) {
+    struct syscall_list_dir_req req;
+
+    req.path_ptr = (uint32_t)(uintptr_t)path;
+    req.path_len = path_len;
+    req.entries_ptr = entry_cap == 0U ? 0U : (uint32_t)(uintptr_t)entries;
+    req.entry_cap = entry_cap;
+    return user_syscall1(SYS_LIST_DIR, (uint32_t)(uintptr_t)&req);
+}
+
+static inline int32_t user_chdir(const char *path, uint32_t path_len) {
+    return user_syscall2(SYS_CHDIR, (uint32_t)(uintptr_t)path, path_len);
+}
+
+static inline int32_t user_getcwd(char *buf, uint32_t buf_len) {
+    return user_syscall2(SYS_GETCWD, (uint32_t)(uintptr_t)buf, buf_len);
 }
 
 static inline void user_yield(void) {

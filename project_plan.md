@@ -1,7 +1,7 @@
 # SkezOS Project Plan (Hobby-Realistic, AI-Assisted)
 
-## Current implementation note (2026-02-28)
-The original phase labels below are now historical scaffolding. The codebase has already delivered the shell/process milestones through the post-Phase-6 interaction slice, completed the narrow shell input follow-up, and landed a first clock/timer slice (`SYS_TIME_INFO` plus `/bin/uptime.elf` and `/bin/sleep.elf`). The currently chosen follow-on is a display-first milestone: `Phase 9 - Framebuffer bring-up and visual shell`. The first slice is deliberately pragmatic: a fixed VGA text-mode chrome layer framed the shell first, then the kernel gained framebuffer metadata capture, a backend-neutral display layer, a safe higher-half framebuffer mapping window, and now a minimal framebuffer text renderer. The default boot path once again requests a framebuffer and uses it when a direct-RGB surface is available. The next concrete work is UI polish on top of that baseline rather than more bring-up plumbing.
+## Current implementation note (2026-03-03)
+The original phase labels below are now historical scaffolding. The codebase has already delivered the shell/process milestones through the post-Phase-6 interaction slice, completed the narrow shell input follow-up, landed the first clock/timer slice (`SYS_TIME_INFO` plus `/bin/uptime.elf` and `/bin/sleep.elf`), and effectively completed the display-first milestone (`Phase 9 - Framebuffer bring-up and visual shell`). The active follow-on is now a narrow reliability milestone: `Phase 10 - Reliability hooks and syscall exerciser`. The first concrete slice is deliberately small: a normal shell-launchable `/bin/diag.elf` tool now exercises a few invalid syscall paths and reports pass/fail, so the project has a lightweight operator-facing reliability probe before broader kernel hooks or block-device work land.
 
 ## 1) Current baseline
 SkezOS currently boots via GRUB/Multiboot2 into a 32-bit kernel and includes:
@@ -196,6 +196,6 @@ A milestone is done only when all are true:
 1. Request a framebuffer mode in the Multiboot/GRUB path and confirm QEMU handoff
 2. Parse the framebuffer info tag into a minimal kernel display descriptor
 3. Add a tiny framebuffer text renderer with VGA fallback
-4. Keep `make qemu-smoke-phase6` green while the shell display path evolves
+4. Keep `make qemu-smoke-shell-core` green while the shell display path evolves
 
 These steps create the platform for a real UI layer without throwing away the current shell/runtime path.

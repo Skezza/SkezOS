@@ -31,7 +31,7 @@ The interactive Phase 6 bootstrap slice is now in place:
 - the shell now runs a real prompt/read/dispatch loop, keeps `help`, `wait`, `ps`, and `exit` as builtins, and launches external commands with `spawn` + `waitpid`
 - `SYS_SPAWN_EX` and `SYS_GETCMDLINE` now provide a narrow flat-cmdline handoff, so `/bin/echo.elf` and `/bin/cat.elf` run as real external tools
 - child launch now inspects fixed-address ET_EXEC images directly instead of relying on a per-path kernel whitelist, while boot shell startup remains fixed-slot
-- `make qemu-smoke-phase6` now drives the shell through serial input, asserts external `echo`/`cat`, and checks unknown-command failure handling
+- `make qemu-smoke-shell-core` now drives the shell through serial input, asserts external `echo`/`cat`, and checks unknown-command failure handling
 - VGA text output now scrolls instead of wrapping over the boot banner, and background worker demo logs stay quiet after the shell takes console ownership
 
 This closes the console handoff blocker and proves the first end-to-end userland workflow. The phase still intentionally keeps the runtime narrow: there is no argv support, no relocatable/dynamic loader, and stdin remains pinned to the shell rather than the foreground child.
@@ -49,7 +49,7 @@ The immediate post-Phase-6 ergonomics slice has now landed on top of this baseli
 - the shell plus `/bin/readln.elf` now support basic erase-in-place editing for `BS` and serial `DEL`
 - `SYS_TIME_INFO` now returns a stable monotonic tick snapshot plus PIT frequency, and a tiny `/bin/uptime.elf` tool exposes that path from the shell
 - a tiny `/bin/sleep.elf` tool now exercises `SYS_SLEEP` from normal userland and reports requested vs observed elapsed ticks
-- `make qemu-smoke-phase6` now also validates `/bin/readln.elf`, real `ps`, `uptime`, `sleep`, `echo`, `cat`, and unknown-command failure handling
+- `make qemu-smoke-shell-core` now also validates `/bin/readln.elf`, real `ps`, `uptime`, `sleep`, `echo`, `cat`, and unknown-command failure handling
 
 This keeps the shell deliberately narrow while removing the most visible interaction/runtime limitations that remained immediately after Phase 6 proper.
 
@@ -114,7 +114,7 @@ The ABI boundary now stops being copied ad hoc into each program. The legacy `sp
 
 Add a dedicated smoke target for the userland workflow, for example:
 
-- `make qemu-smoke-phase6`
+- `make qemu-smoke-shell-core`
 
 Minimum assertions:
 
@@ -127,7 +127,7 @@ Current validation evidence for the interactive slice:
 
 - `make qemu-smoke-phase5`
 - `make qemu-smoke-userfault`
-- `make qemu-smoke-phase6`
+- `make qemu-smoke-shell-core`
 - `make check`
 
 ## Non-goals

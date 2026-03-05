@@ -14,6 +14,12 @@
 	.set SYS_TASK_SNAPSHOT, 12
 	.set SYS_SLEEP, 13
 	.set SYS_TIME_INFO, 14
+	.set SYS_LIST_DIR, 15
+	.set SYS_CHDIR, 16
+	.set SYS_GETCWD, 17
+	.set SYS_PIPE, 18
+	.set SYS_DUP, 19
+	.set SYS_DUP2, 20
 
 	.set SYSCALL_FD_STDIN, 0
 	.set SYSCALL_FD_STDOUT, 1

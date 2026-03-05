@@ -13,14 +13,26 @@ typedef enum {
     VFS_NODE_CHARDEV,
 } vfs_node_type_t;
 
+#define VFS_DIR_ENTRY_NAME_MAX 32U
+
+struct vfs_dir_entry {
+    uint32_t type;
+    char name[VFS_DIR_ENTRY_NAME_MAX];
+};
+
 typedef int (*vfs_lookup_fn_t)(struct vfs_node *dir,
                                const char *name,
                                uint32_t name_len,
                                struct vfs_node **out_node);
+typedef int (*vfs_list_fn_t)(struct vfs_node *dir,
+                             struct vfs_dir_entry *entries,
+                             uint32_t entry_cap,
+                             uint32_t *out_count);
 typedef int (*vfs_open_fn_t)(struct vfs_node *node, uint32_t open_flags, struct kfile *out_file);
 
 struct vfs_node_ops {
     vfs_lookup_fn_t lookup;
+    vfs_list_fn_t list;
     vfs_open_fn_t open;
 };
 
@@ -56,6 +68,10 @@ int vfs_register_root_child(const char *name, struct vfs_node *node);
  */
 int vfs_lookup(const char *path, struct vfs_node **out_node);
 int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file);
+int vfs_list_dir(const char *path,
+                 struct vfs_dir_entry *entries,
+                 uint32_t entry_cap,
+                 uint32_t *out_count);
 
 /* `/dev/console` input remains single-owner. Ownership starts in the kernel
  * console task, then can be handed to one user task at a time. The raw poll

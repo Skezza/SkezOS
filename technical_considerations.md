@@ -1,6 +1,6 @@
 # SkezOS Technical Considerations
 
-## Current sequencing note (2026-02-28)
+## Current sequencing note (2026-03-05)
 
 The post-Phase-6 interaction milestone and the narrow timing follow-up are now delivered:
 
@@ -11,29 +11,30 @@ The post-Phase-6 interaction milestone and the narrow timing follow-up are now d
 - the shell and `readln` now support basic erase-in-place input editing for both `BS` and serial `DEL`
 - `SYS_TIME_INFO` now exposes a stable monotonic tick snapshot plus PIT frequency, and `/bin/uptime.elf` exercises that ABI from the shell
 - `/bin/sleep.elf` now exercises the existing tick scheduler from normal userland and reports requested vs observed elapsed ticks
-- `make qemu-smoke-phase6` now validates `readln`, real `ps`, `uptime`, `sleep`, external `echo`/`cat`, unknown-command failure handling, and clean shell exit
+- `make qemu-smoke-shell-core` is now frozen as the core shell regression path (`readln`, real `ps`, external `echo`/`cat`, unknown-command failure handling, and clean shell exit)
+- `make qemu-smoke-reliability` now carries timing and reliability stress checks (`uptime`, `sleep`, pipe/redirection paths, and `diag`)
 
-The active follow-on is now a display-first creative milestone:
+The display-first milestone is now effectively complete enough to stop treating it as the active planning branch:
 
-- `Phase 9 - Framebuffer bring-up and visual shell`
-- the first landed slice is intentionally small: VGA text mode now reserves fixed chrome rows at the top of the screen and keeps shell/log output in a content region underneath
-- the first real groundwork under that milestone is also in place: the kernel now captures the Multiboot framebuffer handoff descriptor when the bootloader provides it
-- kernel boot output, `/dev/console`, and WARN/PANIC VGA mirroring now flow through a thin `display` abstraction, so the framebuffer backend swap is localized
-- the kernel now also has a dynamic higher-half mapping path plus a reserved framebuffer virtual window, so pixel framebuffer memory can be mapped safely once it is handed over
-- the direct boot-time switch is now active again: the kernel requests an optional `1024x768x32` framebuffer, maps direct-RGB pixel framebuffers, and renders a minimal framebuffer text shell there while keeping VGA as fallback
-- the framebuffer shell now has a larger framed content region, more deliberate chrome, distinct lowercase glyphs, lightweight line color-coding for prompts plus common `user:` / `elf-` output, a scrolling left gutter rail that reinforces those line types, and a fixed prompt lane under the scrolling transcript that now behaves like a labeled input strip with a reserved entry runway, a compact live mode-plus-seconds badge (`R`/`E`/`C` + elapsed monotonic seconds), and trailing-window prompt clipping
-- the current framebuffer font is also denser now: the existing bootstrap glyph table is rasterized onto a 5x7 cell grid instead of the earlier coarse 3x5 presentation, which improves readability without yet adding a full replacement font asset
+- `Phase 9 - Framebuffer bring-up and visual shell` delivered the visual shell surface, framebuffer mapping, tighter chrome, denser glyph rendering, and the current shell-readability passes
+- the shell/runtime path stayed intact while the display path moved behind the `display` abstraction
 
-Guardrails for this visual track:
+The active follow-on is now a narrow reliability milestone:
 
-- keep it keyboard-first and full-screen; do not jump to windows, mouse input, or a compositor yet
-- keep the existing shell/runtime flow intact; this is a presentation and display-path upgrade, not a shell rewrite
-- preserve the serial-first debug path and the current smoke coverage while display work lands
+- `Phase 10 - Reliability hooks and syscall exerciser`
+- first landed slice: `/bin/diag.elf` became a normal shell-launchable tool for a few invalid syscall paths and stable pass/fail reporting
+- second landed slice: `diag` now also covers focused `pipe`/`dup`/`dup2` checks (invalid pointers/FIDs plus pipe EOF and broken-pipe paths), and `qemu-smoke-reliability` asserts those lines directly
 
-Queued after the display-first slice:
+Guardrails for this reliability track:
 
-- broader glyph coverage or a true replacement framebuffer font
-- syscall fuzz hooks or other reliability instrumentation
+- keep it narrow and observable; prefer a few stable probes over broad noisy fuzzing
+- keep the operator path shell-first; diagnostics should behave like ordinary `/bin` tools unless a deeper kernel-only hook is truly needed
+- preserve the serial-first debug path and the existing smoke coverage while reliability probes land
+- the prior "crowded Phase 6 smoke flow" concern is resolved by freezing `qemu-smoke-shell-core` and splitting reliability checks into `qemu-smoke-reliability`
+
+Queued after the current reliability slices:
+
+- broader syscall coverage or structured kernel-side test hooks
 - ATA PIO / block-device bring-up
 
 Historical planning context for the just-completed post-Phase-6 slice lives in `docs/next_phase_handover.md`.

@@ -63,6 +63,25 @@ int kfile_write(struct kfile *file, const void *buf, uint32_t len, uint32_t *out
     return file->ops->write(file, buf, len, out_written);
 }
 
+int kfile_clone(const struct kfile *src, struct kfile *dst) {
+    struct kfile tmp;
+    int rc = 0;
+
+    if (!src || !dst) {
+        return -KERR_INVAL;
+    }
+
+    tmp = *src;
+    if (tmp.ops && tmp.ops->retain) {
+        rc = tmp.ops->retain(&tmp);
+        if (rc < 0) {
+            return rc;
+        }
+    }
+    *dst = tmp;
+    return 0;
+}
+
 int kfile_close(struct kfile *file) {
     int rc = 0;
 

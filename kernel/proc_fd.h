@@ -5,7 +5,7 @@
 
 #include "kfile.h"
 
-#define PROC_FD_MAX         8U
+#define PROC_FD_MAX         16U
 #define PROC_FD_DYNAMIC_MIN 3U
 
 struct proc_fd_slot {
@@ -34,6 +34,16 @@ int proc_fd_alloc(struct proc_fd_table *table,
                   uint32_t *out_fd,
                   struct kfile **out_file);
 int proc_fd_close(struct proc_fd_table *table, uint32_t fd);
+int proc_fd_dup(struct proc_fd_table *table,
+                uint32_t oldfd,
+                uint32_t fd_min,
+                uint32_t *out_newfd,
+                struct kfile **out_file);
+int proc_fd_dup2(struct proc_fd_table *table,
+                 uint32_t oldfd,
+                 uint32_t newfd,
+                 struct kfile **out_file);
+int proc_fd_table_clone(struct proc_fd_table *dst, const struct proc_fd_table *src);
 
 /* Close all open FDs and reset table. Returns number of descriptors closed. */
 uint32_t proc_fd_close_all(struct proc_fd_table *table);

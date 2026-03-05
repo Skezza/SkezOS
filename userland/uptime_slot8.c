@@ -2,8 +2,10 @@
 
 #include "userlib.h"
 
-static const char kPrefix[] = "uptime: ticks_hi=";
-static const char kTicksLo[] = " ticks_lo=";
+static const char kPrefix[] = "uptime: ";
+static const char kUp[] = "up=";
+static const char kTicks[] = " ticks=";
+static const char kTicksSep[] = ":";
 static const char kHz[] = " hz=";
 static const char kQueryFail[] = "uptime: time query failed\n";
 static const char kNewline[] = "\n";
@@ -53,9 +55,16 @@ void _start(int argc, char **argv) {
     }
 
     uptime_write_str(USER_FD_STDOUT, kPrefix);
-    uptime_write_u32(USER_FD_STDOUT, info.ticks_hi);
-    uptime_write_str(USER_FD_STDOUT, kTicksLo);
-    uptime_write_u32(USER_FD_STDOUT, info.ticks_lo);
+    if (info.hz != 0U && info.ticks_hi == 0U) {
+        uptime_write_str(USER_FD_STDOUT, kUp);
+        uptime_write_u32(USER_FD_STDOUT, info.ticks_lo / info.hz);
+        uptime_write_str(USER_FD_STDOUT, "s");
+    } else {
+        uptime_write_str(USER_FD_STDOUT, kTicks);
+        uptime_write_u32(USER_FD_STDOUT, info.ticks_hi);
+        uptime_write_str(USER_FD_STDOUT, kTicksSep);
+        uptime_write_u32(USER_FD_STDOUT, info.ticks_lo);
+    }
     uptime_write_str(USER_FD_STDOUT, kHz);
     uptime_write_u32(USER_FD_STDOUT, info.hz);
     uptime_write_all(USER_FD_STDOUT, kNewline, (uint32_t)(sizeof(kNewline) - 1U));

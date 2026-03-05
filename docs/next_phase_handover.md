@@ -24,7 +24,7 @@ Phase 6 is complete and the system now has a stable boot-to-shell workflow:
 - external `/bin/echo.elf` and `/bin/cat.elf` run through the generic spawn/wait path
 - child launch now inspects fixed-address ET_EXEC images directly instead of relying on bespoke per-path kernel slots
 - user pointer validation is task-aware
-- `make check` covers the active regression path (`qemu-smoke-userfault` + `qemu-smoke-phase6`)
+- `make check` covers the active regression path (`qemu-smoke-userfault` + `qemu-smoke-shell-core`)
 - the console path was just hardened so VGA scrolls instead of wrapping, full console writes are serialized, and worker demo log spam is suppressed while the shell owns the console
 
 Latest known branch at this handoff: `fix/console-output-phase6`
@@ -119,7 +119,7 @@ Once foreground stdin and `ps` are real, the next worker can make a clean decisi
 Existing commands that should stay green throughout:
 
 - `make qemu-smoke-userfault`
-- `make qemu-smoke-phase6`
+- `make qemu-smoke-shell-core`
 - `make check`
 
 Recommended new smoke coverage for the next milestone:
@@ -136,7 +136,7 @@ The easiest way to validate stdin handoff may be adding one tiny dedicated user 
 - Keep the shell intentionally narrow. Do not bundle quoting, pipes, redirection, and job control into this slice.
 - Do not mix in writable filesystem work yet.
 - Do not attempt PIE/relocatable user binaries in this slice.
-- Keep test evidence attached to the work (`make qemu-smoke-phase6` at minimum, ideally `make check`).
+- Keep test evidence attached to the work (`make qemu-smoke-shell-core` at minimum, ideally `make check`).
 
 ## Docs to keep aligned when this starts
 

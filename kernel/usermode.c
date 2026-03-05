@@ -10,6 +10,7 @@
 #include "memory_layout.h"
 #include "paging.h"
 #include "sched.h"
+#include "syscall_abi.h"
 #include "utils.h"
 #include "vfs.h"
 
@@ -497,10 +498,13 @@ int usermode_spawn_shell_task(void) {
 }
 
 int usermode_spawn_path_task(const char *path) {
-    return usermode_spawn_path_task_ex(path, 0, 0U);
+    return usermode_spawn_path_task_ex(path, 0, 0U, 0U);
 }
 
-int usermode_spawn_path_task_ex(const char *path, const char *cmdline, uint32_t cmdline_len) {
+int usermode_spawn_path_task_ex(const char *path,
+                                const char *cmdline,
+                                uint32_t cmdline_len,
+                                uint32_t spawn_flags) {
     struct elf32_user_layout layout;
     struct usermode_child_slot *slot;
     int child_pid;
@@ -549,6 +553,7 @@ int usermode_spawn_path_task_ex(const char *path, const char *cmdline, uint32_t 
                                      usermode_child_slot_task,
                                      (void *)slot,
                                      0,
+                                     (spawn_flags & SYSCALL_SPAWN_FLAG_INHERIT_FDS) != 0U,
                                      &child_pid);
     if (rc < 0) {
         slot->used = 0;

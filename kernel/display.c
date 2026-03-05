@@ -19,8 +19,9 @@ typedef enum {
 typedef enum {
     DISPLAY_LINE_STYLE_NORMAL = 0,
     DISPLAY_LINE_STYLE_PROMPT = 1,
-    DISPLAY_LINE_STYLE_USER = 2,
-    DISPLAY_LINE_STYLE_TASK = 3,
+    DISPLAY_LINE_STYLE_COMMAND = 2,
+    DISPLAY_LINE_STYLE_USER = 3,
+    DISPLAY_LINE_STYLE_TASK = 4,
 } display_line_style_t;
 
 struct display_glyph {
@@ -154,13 +155,13 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
 #define DISPLAY_FB_CHAR_H 18U
 #define DISPLAY_FB_FONT_SRC_W 3U
 #define DISPLAY_FB_FONT_SRC_H 5U
-#define DISPLAY_FB_GLYPH_W 5U
-#define DISPLAY_FB_GLYPH_H 7U
+#define DISPLAY_FB_GLYPH_W 4U
+#define DISPLAY_FB_GLYPH_H 8U
 #define DISPLAY_FB_GLYPH_SCALE_X 2U
 #define DISPLAY_FB_GLYPH_SCALE_Y 2U
-#define DISPLAY_FB_GLYPH_X_PAD 2U
-#define DISPLAY_FB_GLYPH_Y_PAD 2U
-#define DISPLAY_FB_HEADER_ROWS 2U
+#define DISPLAY_FB_GLYPH_X_PAD 3U
+#define DISPLAY_FB_GLYPH_Y_PAD 1U
+#define DISPLAY_FB_HEADER_ROWS 1U
 #define DISPLAY_FB_FOOTER_ROWS 0U
 #define DISPLAY_FB_PANEL_MARGIN_X 16U
 #define DISPLAY_FB_PANEL_MARGIN_Y 4U
@@ -169,7 +170,7 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
 #define DISPLAY_FB_LINE_GUTTER_GAP 4U
 #define DISPLAY_FB_LINE_GUTTER_TOTAL \
     (DISPLAY_FB_LINE_GUTTER_WIDTH + DISPLAY_FB_LINE_GUTTER_GAP)
-#define DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS 5U
+#define DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS 7U
 #define DISPLAY_FB_PROMPT_STATUS_RESERVE_COLS 0U
 
 static uint32_t display_framebuffer_pack_rgb(uint8_t r, uint8_t g, uint8_t b);
@@ -209,8 +210,13 @@ static void display_framebuffer_line_colors(display_line_style_t style,
                                             uint32_t *fg_pixel,
                                             uint32_t *bg_pixel) {
     if (style == DISPLAY_LINE_STYLE_PROMPT) {
-        *fg_pixel = display_framebuffer_pack_rgb(196U, 246U, 198U);
-        *bg_pixel = display_framebuffer_pack_rgb(4U, 20U, 10U);
+        *fg_pixel = display_framebuffer_pack_rgb(234U, 242U, 252U);
+        *bg_pixel = display_framebuffer_pack_rgb(4U, 11U, 24U);
+        return;
+    }
+    if (style == DISPLAY_LINE_STYLE_COMMAND) {
+        *fg_pixel = display_framebuffer_pack_rgb(124U, 168U, 198U);
+        *bg_pixel = display_framebuffer_pack_rgb(0U, 0U, 0U);
         return;
     }
     if (style == DISPLAY_LINE_STYLE_USER) {
@@ -230,7 +236,10 @@ static void display_framebuffer_line_colors(display_line_style_t style,
 
 static uint32_t display_framebuffer_line_marker_color(display_line_style_t style) {
     if (style == DISPLAY_LINE_STYLE_PROMPT) {
-        return display_framebuffer_pack_rgb(94U, 222U, 118U);
+        return display_framebuffer_pack_rgb(72U, 160U, 224U);
+    }
+    if (style == DISPLAY_LINE_STYLE_COMMAND) {
+        return display_framebuffer_pack_rgb(48U, 94U, 132U);
     }
     if (style == DISPLAY_LINE_STYLE_USER) {
         return display_framebuffer_pack_rgb(88U, 196U, 250U);
@@ -308,8 +317,10 @@ static void display_framebuffer_clear_scroll_row(uint32_t row) {
 
 static void display_framebuffer_draw_prompt_strip_idle(void) {
     uint32_t prompt_top = g_display_fb.content_top_px + (g_display_fb.scroll_rows * DISPLAY_FB_CHAR_H);
-    uint32_t prompt_fg = display_framebuffer_pack_rgb(212U, 246U, 214U);
-    uint32_t prompt_bg = display_framebuffer_pack_rgb(6U, 26U, 14U);
+    uint32_t prompt_fg = display_framebuffer_pack_rgb(242U, 236U, 204U);
+    uint32_t prompt_bg = display_framebuffer_pack_rgb(11U, 18U, 36U);
+    uint32_t prompt_well_bg = display_framebuffer_pack_rgb(4U, 11U, 24U);
+    uint32_t prompt_accent = display_framebuffer_pack_rgb(72U, 160U, 224U);
     uint32_t prompt_text_left =
         g_display_fb.content_left_px + (DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS * DISPLAY_FB_CHAR_W);
     uint32_t prompt_text_width = display_framebuffer_prompt_visible_cols() * DISPLAY_FB_CHAR_W;
@@ -325,21 +336,27 @@ static void display_framebuffer_draw_prompt_strip_idle(void) {
         DISPLAY_FB_CHAR_H,
         prompt_bg);
     display_framebuffer_fill_rect_packed(
+        g_display_fb.content_left_px,
+        prompt_top,
+        g_display_fb.content_width_px,
+        1U,
+        prompt_accent);
+    display_framebuffer_fill_rect_packed(
         prompt_text_left,
         prompt_top,
         prompt_text_width,
         DISPLAY_FB_CHAR_H,
-        display_framebuffer_pack_rgb(3U, 18U, 10U));
+        prompt_well_bg);
     display_framebuffer_fill_rect_packed(
         separator_x,
         prompt_top + 2U,
         2U,
         DISPLAY_FB_CHAR_H - 4U,
-        display_framebuffer_pack_rgb(64U, 112U, 76U));
+        prompt_accent);
     display_framebuffer_draw_text_packed(
         g_display_fb.content_left_px + DISPLAY_FB_CHAR_W,
         prompt_top + 2U,
-        "CMD",
+        "INPUT",
         prompt_fg,
         prompt_bg);
 }
@@ -352,18 +369,29 @@ static void display_framebuffer_redraw_current_line(void) {
     uint32_t render_row = g_display_fb.cursor_row;
     uint32_t render_len = g_display_fb.line_len;
     uint32_t start_idx = 0U;
+    uint32_t clipped_prompt = 0U;
 
     display_framebuffer_line_colors(g_display_fb.line_style, &fg_pixel, &bg_pixel);
     if (g_display_fb.line_style == DISPLAY_LINE_STYLE_PROMPT) {
+        uint32_t visible_cols;
+
         if (g_display_fb.cursor_row < g_display_fb.scroll_rows) {
             display_framebuffer_clear_scroll_row(g_display_fb.cursor_row);
         }
         render_row = g_display_fb.scroll_rows;
         cell_x = g_display_fb.content_left_px +
                  (DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS * DISPLAY_FB_CHAR_W);
-        render_len = display_framebuffer_prompt_visible_cols();
+        visible_cols = display_framebuffer_prompt_visible_cols();
+        render_len = visible_cols;
         if (g_display_fb.line_len > render_len) {
-            start_idx = g_display_fb.line_len - render_len;
+            clipped_prompt = 1U;
+            if (visible_cols > 1U) {
+                render_len = visible_cols - 1U;
+                start_idx = g_display_fb.line_len - render_len;
+            } else {
+                render_len = 0U;
+                start_idx = g_display_fb.line_len;
+            }
         } else {
             render_len = g_display_fb.line_len;
         }
@@ -392,6 +420,10 @@ static void display_framebuffer_redraw_current_line(void) {
             bg_pixel);
     }
 
+    if (clipped_prompt != 0U) {
+        display_framebuffer_draw_glyph_packed(cell_x, cell_y, '<', fg_pixel, bg_pixel);
+        cell_x += DISPLAY_FB_CHAR_W;
+    }
     for (uint32_t i = 0; i < render_len; i++) {
         display_framebuffer_draw_glyph_packed(
             cell_x, cell_y, g_display_fb.line_text[start_idx + i], fg_pixel, bg_pixel);
@@ -474,17 +506,18 @@ static uint32_t display_scale_channel(uint8_t value, uint8_t mask_size) {
 static int display_framebuffer_bootstrap_font_pixel_on(const uint8_t *rows,
                                                        uint32_t row,
                                                        uint32_t col) {
-    uint32_t src_row;
-    uint32_t src_col;
+    uint32_t src_row =
+        (((row * 2U) + 1U) * DISPLAY_FB_FONT_SRC_H) / (DISPLAY_FB_GLYPH_H * 2U);
+    uint32_t src_col =
+        (((col * 2U) + 1U) * DISPLAY_FB_FONT_SRC_W) / (DISPLAY_FB_GLYPH_W * 2U);
 
-    src_row = (((row * 2U) + 1U) * DISPLAY_FB_FONT_SRC_H) / (DISPLAY_FB_GLYPH_H * 2U);
-    src_col = (((col * 2U) + 1U) * DISPLAY_FB_FONT_SRC_W) / (DISPLAY_FB_GLYPH_W * 2U);
     if (src_row >= DISPLAY_FB_FONT_SRC_H) {
         src_row = DISPLAY_FB_FONT_SRC_H - 1U;
     }
     if (src_col >= DISPLAY_FB_FONT_SRC_W) {
         src_col = DISPLAY_FB_FONT_SRC_W - 1U;
     }
+
     return (rows[src_row] & (1U << (DISPLAY_FB_FONT_SRC_W - 1U - src_col))) != 0U;
 }
 
@@ -642,6 +675,9 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
         seconds = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL) / hz;
     }
 
+    display_append_text(metrics_text, &len, cap, "BUILD ");
+    display_append_text(metrics_text, &len, cap, __DATE__);
+    display_append_text(metrics_text, &len, cap, "  ");
     display_append_text(metrics_text, &len, cap, "UP ");
     display_append_u32(metrics_text, &len, cap, seconds);
     display_append_text(metrics_text, &len, cap, "s  RAM ");
@@ -651,11 +687,11 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
 }
 
 static void display_framebuffer_draw_header_metrics(void) {
-    uint32_t metrics_bg = display_framebuffer_pack_rgb(10U, 16U, 28U);
+    uint32_t metrics_bg = display_framebuffer_pack_rgb(9U, 18U, 34U);
     uint32_t metrics_fg = display_framebuffer_pack_rgb(229U, 236U, 246U);
-    uint32_t metrics_shadow = display_framebuffer_pack_rgb(0U, 4U, 12U);
-    uint32_t metrics_y = DISPLAY_FB_CHAR_H + 2U;
-    uint32_t metrics_left = 12U * DISPLAY_FB_CHAR_W;
+    uint32_t metrics_shadow = display_framebuffer_pack_rgb(0U, 6U, 16U);
+    uint32_t metrics_y = 2U;
+    uint32_t metrics_left = 20U * DISPLAY_FB_CHAR_W;
     uint32_t metrics_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
     char metrics_text[64];
 
@@ -668,7 +704,7 @@ static void display_framebuffer_draw_header_metrics(void) {
         metrics_left,
         metrics_y,
         metrics_right - metrics_left,
-        DISPLAY_FB_CHAR_H,
+        DISPLAY_FB_CHAR_H - 2U,
         metrics_bg);
     display_framebuffer_draw_text_right_emphasized_packed(
         metrics_right,
@@ -768,7 +804,7 @@ static void display_framebuffer_putc(char c) {
     }
     if (c == '\n') {
         if (g_display_fb.line_style == DISPLAY_LINE_STYLE_PROMPT) {
-            g_display_fb.line_style = DISPLAY_LINE_STYLE_USER;
+            g_display_fb.line_style = DISPLAY_LINE_STYLE_COMMAND;
             display_framebuffer_redraw_current_line();
         }
         g_display_fb.cursor_row++;
@@ -845,10 +881,12 @@ static void display_framebuffer_draw_shell_frame(void) {
     uint32_t title_bg = display_framebuffer_pack_rgb(14U, 32U, 74U);
     uint32_t title_fg = display_framebuffer_pack_rgb(252U, 252U, 252U);
     uint32_t title_shadow = display_framebuffer_pack_rgb(3U, 13U, 32U);
-    uint32_t meta_bg = display_framebuffer_pack_rgb(10U, 16U, 28U);
-    uint32_t meta_fg = display_framebuffer_pack_rgb(189U, 201U, 219U);
-    uint32_t meta_shadow = display_framebuffer_pack_rgb(0U, 4U, 12U);
     uint32_t accent = display_framebuffer_pack_rgb(245U, 170U, 72U);
+    uint32_t badge_fg = display_framebuffer_pack_rgb(8U, 16U, 30U);
+    uint32_t badge_x = 8U * DISPLAY_FB_CHAR_W;
+    uint32_t badge_y = 2U;
+    uint32_t badge_w = (7U * DISPLAY_FB_CHAR_W) - 4U;
+    uint32_t badge_h = DISPLAY_FB_CHAR_H - 4U;
     uint32_t panel_border = display_framebuffer_pack_rgb(32U, 46U, 68U);
     uint32_t panel_bg = display_framebuffer_pack_rgb(0U, 0U, 0U);
     uint32_t panel_left =
@@ -861,15 +899,8 @@ static void display_framebuffer_draw_shell_frame(void) {
 
     display_framebuffer_fill_rect_packed(0U, 0U, g_display_fb.info.width, g_display_fb.info.height, back_bg);
     display_framebuffer_fill_rect_packed(
-        0U, 0U, g_display_fb.info.width, DISPLAY_FB_CHAR_H * (DISPLAY_FB_HEADER_ROWS - 1U), title_bg);
-    display_framebuffer_fill_rect_packed(
-        0U,
-        DISPLAY_FB_CHAR_H * (DISPLAY_FB_HEADER_ROWS - 1U),
-        g_display_fb.info.width,
-        DISPLAY_FB_CHAR_H,
-        meta_bg);
-    display_framebuffer_fill_rect_packed(
-        0U, (DISPLAY_FB_CHAR_H * DISPLAY_FB_HEADER_ROWS) - 2U, g_display_fb.info.width, 2U, accent);
+        0U, 0U, g_display_fb.info.width, DISPLAY_FB_CHAR_H, title_bg);
+    display_framebuffer_fill_rect_packed(0U, DISPLAY_FB_CHAR_H - 2U, g_display_fb.info.width, 2U, accent);
     display_framebuffer_fill_rect_packed(panel_left, panel_top, panel_width, panel_height, panel_border);
 #if DISPLAY_FB_FOOTER_ROWS > 0
     display_framebuffer_fill_rect_packed(
@@ -905,12 +936,19 @@ static void display_framebuffer_draw_shell_frame(void) {
         title_fg,
         title_bg,
         title_shadow);
+    display_framebuffer_fill_rect_packed(
+        badge_x,
+        badge_y,
+        badge_w,
+        badge_h,
+        accent);
+    display_framebuffer_draw_text_packed(
+        badge_x + 6U,
+        badge_y + 1U,
+        "KERNEL",
+        badge_fg,
+        accent);
     display_framebuffer_draw_header_metrics();
-    display_framebuffer_draw_text_emphasized_packed(
-        DISPLAY_FB_CHAR_W,
-        ((DISPLAY_FB_HEADER_ROWS - 1U) * DISPLAY_FB_CHAR_H) + 2U,
-        "SHELL",
-        meta_fg, meta_bg, meta_shadow);
 }
 
 void display_init(void) {

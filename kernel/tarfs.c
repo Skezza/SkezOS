@@ -8,6 +8,7 @@
 #include "kfile.h"
 #include "klog.h"
 #include "kmalloc.h"
+#include "syscall_abi.h"
 #include "utils.h"
 #include "vfs.h"
 
@@ -50,17 +51,23 @@ static int tarfs_dir_lookup(struct vfs_node *dir,
                             const char *name,
                             uint32_t name_len,
                             struct vfs_node **out_node);
+static int tarfs_dir_list(struct vfs_node *dir,
+                          struct vfs_dir_entry *entries,
+                          uint32_t entry_cap,
+                          uint32_t *out_count);
 static int tarfs_file_open(struct vfs_node *node, uint32_t open_flags, struct kfile *out_file);
 static int tarfs_file_read(struct kfile *file, void *buf, uint32_t len, uint32_t *out_read);
 static int tarfs_file_write(struct kfile *file, const void *buf, uint32_t len, uint32_t *out_written);
 
 static const struct vfs_node_ops g_tarfs_dir_ops = {
     .lookup = tarfs_dir_lookup,
+    .list = tarfs_dir_list,
     .open = 0,
 };
 
 static const struct vfs_node_ops g_tarfs_file_ops_node = {
     .lookup = 0,
+    .list = 0,
     .open = tarfs_file_open,
 };
 
@@ -85,6 +92,23 @@ static int tarfs_name_eq(const char *a, const char *b, uint32_t b_len) {
         }
     }
     return a[b_len] == '\0';
+}
+
+static void tarfs_copy_dir_entry_name(char *dst, const char *src) {
+    uint32_t i = 0U;
+
+    if (!dst) {
+        return;
+    }
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    while (src[i] != '\0' && i + 1U < VFS_DIR_ENTRY_NAME_MAX) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
 }
 
 static int tarfs_bytes_eq(const uint8_t *a, const char *b, uint32_t len) {
@@ -441,12 +465,48 @@ static int tarfs_dir_lookup(struct vfs_node *dir,
     return 0;
 }
 
+static int tarfs_dir_list(struct vfs_node *dir,
+                          struct vfs_dir_entry *entries,
+                          uint32_t entry_cap,
+                          uint32_t *out_count) {
+    struct tarfs_node *child;
+    uint32_t count = 0U;
+
+    if (!dir || !out_count) {
+        return -KERR_INVAL;
+    }
+    *out_count = 0U;
+    if (entry_cap != 0U && !entries) {
+        return -KERR_INVAL;
+    }
+
+    child = ((struct tarfs_node *)dir)->first_child;
+    while (child) {
+        if (count >= entry_cap) {
+            break;
+        }
+        entries[count].type = (uint32_t)child->vfs.type;
+        tarfs_copy_dir_entry_name(entries[count].name, child->vfs.name);
+        count++;
+        child = child->next_sibling;
+    }
+
+    *out_count = count;
+    return 0;
+}
+
 static int tarfs_file_open(struct vfs_node *node, uint32_t open_flags, struct kfile *out_file) {
     if (!node || !out_file) {
         return -KERR_INVAL;
     }
     if (node->type != VFS_NODE_FILE) {
         return -KERR_INVAL;
+    }
+    if ((open_flags & (SYSCALL_OPEN_FLAG_WRITE |
+                       SYSCALL_OPEN_FLAG_CREATE |
+                       SYSCALL_OPEN_FLAG_TRUNC |
+                       SYSCALL_OPEN_FLAG_APPEND)) != 0U) {
+        return -KERR_NOTSUP;
     }
     kfile_init(out_file, node, &g_tarfs_file_ops, 0, open_flags);
     return 0;
