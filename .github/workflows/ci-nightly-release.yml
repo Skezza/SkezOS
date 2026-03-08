@@ -1,0 +1,39 @@
+name: Nightly Release Check
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-release-check
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-release:
+    name: make check-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build and smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gcc-multilib \
+            binutils \
+            grub-common \
+            grub-pc-bin \
+            xorriso \
+            qemu-system-x86 \
+            mtools
+
+      - name: Run release smoke chain
+        run: make check-release
