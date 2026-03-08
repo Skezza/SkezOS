@@ -681,6 +681,51 @@ qemu-smoke-reliability: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
+	@if ! grep -Fq "diag: time_info bad ptr ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag time_info bad-pointer check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: time_info valid ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag time_info valid check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: waitpid options notsup ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag waitpid options-not-supported check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: task_snapshot bad ptr ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag task_snapshot bad-pointer check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: task_snapshot zero cap ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag task_snapshot zero-cap check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: task_snapshot cap one ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag task_snapshot cap-one check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: list_dir bad req ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag list_dir bad-request check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: list_dir root zero cap ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag list_dir root zero-cap check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: list_dir root cap one ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag list_dir root cap-one check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
 	@if ! grep -Fq "diag: PASS" $(BUILD)/qemu-smoke-reliability.log; then \
 		echo "[qemu-smoke-reliability] Missing diag syscall self-check output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \

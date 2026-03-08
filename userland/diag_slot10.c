@@ -13,6 +13,15 @@ static const char kCheckDupBadFd[] = "diag: dup invalid fd";
 static const char kCheckDup2BadTarget[] = "diag: dup2 invalid target fd";
 static const char kCheckPipeEof[] = "diag: pipe eof after writer close";
 static const char kCheckPipeBroken[] = "diag: pipe broken write";
+static const char kCheckTimeInfoBadPtr[] = "diag: time_info bad ptr";
+static const char kCheckTimeInfoOk[] = "diag: time_info valid";
+static const char kCheckWaitpidOptionsNotsup[] = "diag: waitpid options notsup";
+static const char kCheckTaskSnapshotBadPtr[] = "diag: task_snapshot bad ptr";
+static const char kCheckTaskSnapshotZeroCap[] = "diag: task_snapshot zero cap";
+static const char kCheckTaskSnapshotOne[] = "diag: task_snapshot cap one";
+static const char kCheckListDirBadReq[] = "diag: list_dir bad req";
+static const char kCheckListDirZeroCap[] = "diag: list_dir root zero cap";
+static const char kCheckListDirOne[] = "diag: list_dir root cap one";
 static const char kOk[] = " ok\n";
 static const char kBad[] = " bad rc=";
 
@@ -100,6 +109,51 @@ static int32_t diag_pipe_write_after_reader_close(void) {
     return rc;
 }
 
+static int32_t diag_time_info_valid(void) {
+    struct syscall_time_info info;
+    int32_t rc = user_time_info(&info);
+
+    if (rc < 0) {
+        return rc;
+    }
+    if (info.hz == 0U) {
+        return -22;
+    }
+    return 0;
+}
+
+static int32_t diag_task_snapshot_cap_one(void) {
+    struct syscall_task_snapshot_entry entry;
+    int32_t rc = user_task_snapshot(&entry, 1U);
+
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc != 1) {
+        return -22;
+    }
+    if (entry.pid <= 0) {
+        return -22;
+    }
+    return 0;
+}
+
+static int32_t diag_list_dir_root_cap_one(void) {
+    struct syscall_dir_entry entry;
+    int32_t rc = user_list_dir("/", 1U, &entry, 1U);
+
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc != 1) {
+        return -22;
+    }
+    if (entry.name[0] == '\0') {
+        return -22;
+    }
+    return 0;
+}
+
 void _start(int argc, char **argv) {
     int ok = 1;
 
@@ -149,6 +203,51 @@ void _start(int argc, char **argv) {
     if (!diag_expect(kCheckPipeBroken,
                      diag_pipe_write_after_reader_close(),
                      -32)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckTimeInfoBadPtr,
+                     user_syscall1(SYS_TIME_INFO, 0U),
+                     -14)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckTimeInfoOk,
+                     diag_time_info_valid(),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckWaitpidOptionsNotsup,
+                     user_waitpid(-1, 0, 1U),
+                     -95)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckTaskSnapshotBadPtr,
+                     user_syscall2(SYS_TASK_SNAPSHOT, 0U, 1U),
+                     -14)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckTaskSnapshotZeroCap,
+                     user_task_snapshot(0, 0U),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckTaskSnapshotOne,
+                     diag_task_snapshot_cap_one(),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckListDirBadReq,
+                     user_syscall1(SYS_LIST_DIR, 0U),
+                     -14)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckListDirZeroCap,
+                     user_list_dir("/", 1U, 0, 0U),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckListDirOne,
+                     diag_list_dir_root_cap_one(),
+                     0)) {
         ok = 0;
     }
 
