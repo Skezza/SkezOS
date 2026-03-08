@@ -726,6 +726,26 @@ qemu-smoke-reliability: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
+	@if ! grep -Fq "diag: getcwd bad ptr ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag getcwd bad-pointer check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: getcwd zero len ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag getcwd zero-length check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: chdir file notsup ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag chdir file-not-supported check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: cwd root roundtrip ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag cwd round-trip check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
 	@if ! grep -Fq "diag: PASS" $(BUILD)/qemu-smoke-reliability.log; then \
 		echo "[qemu-smoke-reliability] Missing diag syscall self-check output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \

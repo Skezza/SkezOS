@@ -22,6 +22,10 @@ static const char kCheckTaskSnapshotOne[] = "diag: task_snapshot cap one";
 static const char kCheckListDirBadReq[] = "diag: list_dir bad req";
 static const char kCheckListDirZeroCap[] = "diag: list_dir root zero cap";
 static const char kCheckListDirOne[] = "diag: list_dir root cap one";
+static const char kCheckGetcwdBadPtr[] = "diag: getcwd bad ptr";
+static const char kCheckGetcwdZeroLen[] = "diag: getcwd zero len";
+static const char kCheckChdirNotDir[] = "diag: chdir file notsup";
+static const char kCheckCwdRootRoundtrip[] = "diag: cwd root roundtrip";
 static const char kOk[] = " ok\n";
 static const char kBad[] = " bad rc=";
 
@@ -154,6 +158,23 @@ static int32_t diag_list_dir_root_cap_one(void) {
     return 0;
 }
 
+static int32_t diag_cwd_root_roundtrip(void) {
+    char cwd[SYSCALL_CWD_MAX];
+    int32_t rc = user_chdir("/", 1U);
+
+    if (rc < 0) {
+        return rc;
+    }
+    rc = user_getcwd(cwd, sizeof(cwd));
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc != 1 || cwd[0] != '/' || cwd[1] != '\0') {
+        return -22;
+    }
+    return 0;
+}
+
 void _start(int argc, char **argv) {
     int ok = 1;
 
@@ -247,6 +268,26 @@ void _start(int argc, char **argv) {
     }
     if (!diag_expect(kCheckListDirOne,
                      diag_list_dir_root_cap_one(),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckGetcwdBadPtr,
+                     user_getcwd((char *)(uintptr_t)1U, 1U),
+                     -14)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckGetcwdZeroLen,
+                     user_getcwd((char *)(uintptr_t)1U, 0U),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckChdirNotDir,
+                     user_chdir("/bin/diag.elf", 13U),
+                     -95)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckCwdRootRoundtrip,
+                     diag_cwd_root_roundtrip(),
                      0)) {
         ok = 0;
     }
