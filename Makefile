@@ -689,6 +689,11 @@ qemu-smoke-reliability: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
+	@if ! grep -Fq '{"type":"event","seq":1,' $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing reliability_runner event trace JSON"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
 	@if ! grep -Fq "diag: pipe bad ptr ok" $(BUILD)/qemu-smoke-reliability.log; then \
 		echo "[qemu-smoke-reliability] Missing diag pipe bad-pointer check"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
