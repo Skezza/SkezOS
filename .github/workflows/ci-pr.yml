@@ -37,3 +37,33 @@ jobs:
 
       - name: Run PR smoke chain
         run: make check
+
+      - name: Show reliability reports on failure
+        if: failure()
+        run: |
+          for f in \
+            build/qemu-smoke-reliability.report \
+            build/qemu-smoke-reliability-replay.report \
+            build/qemu-smoke-reliability-fuzz-lite.report; do
+            if [ -f "$f" ]; then
+              echo "== tail: $f =="
+              tail -n 80 "$f"
+            fi
+          done
+          for f in build/qemu-smoke-reliability*.log; do
+            if [ -f "$f" ]; then
+              echo "== tail: $f =="
+              tail -n 120 "$f"
+            fi
+          done
+
+      - name: Upload smoke logs and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-smoke-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/qemu-smoke*.log
+            build/*.report
+          if-no-files-found: warn
+          retention-days: 14
