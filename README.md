@@ -39,7 +39,7 @@ Small 32-bit x86 kernel that boots via GRUB Multiboot2. It is mostly C, with a l
 
 It is intentionally minimal. The shell is still bootstrap-grade: whitespace parsing, foreground-only execution, real `argc/argv` for spawned tools, blocking `/dev/console` reads, bounded `ps`, basic line editing, and `uptime`/`sleep` via `SYS_TIME_INFO` and the tick scheduler.
 
-Display output now goes through a thin abstraction layer. The kernel can map a higher-half framebuffer window safely, and the default boot path uses a framebuffer text shell when a direct-RGB surface is available, with VGA fallback otherwise. The framebuffer shell has a compact header, a framed content area, color-coded prompts and common line types, a scrolling gutter, a fixed prompt lane, and a footer HUD with a command timeline rail. The current font is still a bootstrap font, now rendered on a denser 5x7 grid with full printable-ASCII coverage verification at boot.
+Display output now goes through a thin abstraction layer. The kernel can map a higher-half framebuffer window safely, and the default boot path uses a framebuffer text shell when a direct-RGB surface is available, with VGA fallback otherwise. The framebuffer shell has a compact header, a framed content area, color-coded prompts and common line types, a scrolling gutter, a fixed prompt lane, and a footer HUD with a command timeline rail. The current font is still a bootstrap font, now rendered on a denser 5x7 grid with full printable-ASCII coverage verification at boot. The framebuffer profile also emits a deterministic GUI state hash line used by smoke tests.
 
 It also supports basic external-command pipelines and redirection: `|`, `<`, `>`, `>>`, `2>`, and `2>>`. It still has no quoting, `2>&1`, or background jobs.
 

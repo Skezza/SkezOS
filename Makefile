@@ -27,6 +27,7 @@ RELIABILITY_JSON_VALIDATOR = ./scripts/validate_reliability_json.sh
 RELIABILITY_JSON_REPORTER = ./scripts/reliability_json_report.sh
 REPLAY_HASH_ALL_SEED1337 ?= 903686660
 REPLAY_HASH_QUICK_SEED1337 ?= 258156515
+GUI_STATE_HASH_FB_SHELL_V1 ?= 0xD37ACA77
 PHASE4_REPEAT ?= 3
 USERLAND_BUILD = $(BUILD)/userland
 INITRAMFS_STAGING = $(BUILD)/initramfs_root
@@ -545,6 +546,13 @@ qemu-smoke-shell-core: $(ISO)
 	@echo "[qemu-smoke-shell-core] Booting headless VM with scripted shell input..."
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log,$(SHELL_CORE_SMOKE_SCRIPT))
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log)
+	@if grep -Fq "display: framebuffer console active" $(BUILD)/qemu-smoke-shell-core.log; then \
+		if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V1) profile=fb-shell-v1" $(BUILD)/qemu-smoke-shell-core.log; then \
+			echo "[qemu-smoke-shell-core] Missing or changed framebuffer GUI state hash"; \
+			tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+			exit 1; \
+		fi; \
+	fi
 	@if ! awk 'BEGIN{in_shell=0;bad=0} /SkezOS shell ready/{in_shell=1} /sh: exit/{in_shell=0} in_shell && /sched demo:/{bad=1} END{exit bad ? 1 : 0}' $(BUILD)/qemu-smoke-shell-core.log; then \
 		echo "[qemu-smoke-shell-core] Unexpected worker demo log spam while shell was active"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \

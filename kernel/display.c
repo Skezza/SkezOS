@@ -229,6 +229,8 @@ static void display_framebuffer_draw_footer_hud(void);
 static uint32_t display_framebuffer_prompt_visible_cols(void);
 static int display_font_has_glyph(char c);
 static void display_verify_font_coverage(void);
+static uint32_t display_hash_u32(uint32_t hash, uint32_t value);
+static uint32_t display_compute_gui_state_hash(void);
 static int display_line_starts_with(const char *text, uint32_t len, const char *prefix);
 static int display_line_contains(const char *text, uint32_t len, const char *needle);
 static int display_parse_wait_exit_code(const char *text, uint32_t len, int32_t *out_exit_code);
@@ -509,6 +511,51 @@ static void display_verify_font_coverage(void) {
     } else {
         KLOGW("display: bootstrap font coverage missing=%u first='%c'", missing, first_missing);
     }
+}
+
+static uint32_t display_hash_u32(uint32_t hash, uint32_t value) {
+    for (uint32_t i = 0U; i < 4U; i++) {
+        hash ^= (value >> (i * 8U)) & 0xFFU;
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static uint32_t display_compute_gui_state_hash(void) {
+    uint32_t hash = 2166136261U;
+
+    hash = display_hash_u32(hash, 0x46425331U); /* "FBS1" */
+    hash = display_hash_u32(hash, g_display_fb.info.width);
+    hash = display_hash_u32(hash, g_display_fb.info.height);
+    hash = display_hash_u32(hash, g_display_fb.info.pitch);
+    hash = display_hash_u32(hash, (uint32_t)g_display_fb.info.bpp);
+    hash = display_hash_u32(hash, g_display_fb.bytes_per_pixel);
+    hash = display_hash_u32(hash, g_display_fb.text_cols);
+    hash = display_hash_u32(hash, g_display_fb.text_rows);
+    hash = display_hash_u32(hash, g_display_fb.scroll_rows);
+    hash = display_hash_u32(hash, g_display_fb.content_left_px);
+    hash = display_hash_u32(hash, g_display_fb.content_width_px);
+    hash = display_hash_u32(hash, g_display_fb.content_top_px);
+    hash = display_hash_u32(hash, g_display_fb.content_bottom_px);
+    hash = display_hash_u32(hash, DISPLAY_FB_CHAR_W);
+    hash = display_hash_u32(hash, DISPLAY_FB_CHAR_H);
+    hash = display_hash_u32(hash, DISPLAY_FB_PANEL_MARGIN_X);
+    hash = display_hash_u32(hash, DISPLAY_FB_PANEL_MARGIN_Y);
+    hash = display_hash_u32(hash, DISPLAY_FB_PANEL_BORDER);
+    hash = display_hash_u32(hash, DISPLAY_FB_LINE_GUTTER_TOTAL);
+    hash = display_hash_u32(hash, DISPLAY_FB_HEADER_ROWS);
+    hash = display_hash_u32(hash, DISPLAY_FB_FOOTER_ROWS);
+    hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_CAP);
+    hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_RAIL_INSET);
+
+    /* Include timeline HUD palette IDs to version visual style changes. */
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(11U, 18U, 32U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(215U, 226U, 242U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(74U, 204U, 148U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(228U, 96U, 86U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(52U, 128U, 204U));
+
+    return hash;
 }
 
 static uint32_t display_string_length(const char *text) {
@@ -1325,6 +1372,7 @@ void display_late_init(void) {
     uint32_t phys_offset;
     uint32_t map_length;
     uint64_t span_bytes_u64;
+    uint32_t gui_hash;
     int rc;
 
     g_display_fb.ready = 0U;
@@ -1420,10 +1468,16 @@ void display_late_init(void) {
         g_display_fb.content_top_px + (g_display_fb.text_rows * DISPLAY_FB_CHAR_H);
     g_display_fb.cursor_col = 0U;
     g_display_fb.cursor_row = 0U;
+    g_display_fb.timeline_count = 0U;
+    g_display_fb.timeline_head = 0U;
+    g_display_fb.command_active = 0U;
+    g_display_fb.command_start_ticks = 0U;
+    g_display_fb.command_tag = '?';
     g_display_fb.ready = 1U;
 
     display_framebuffer_draw_shell_frame();
     g_display_mode = DISPLAY_MODE_FRAMEBUFFER;
+    gui_hash = display_compute_gui_state_hash();
 
     KLOGI("display: framebuffer console active phys=%x virt=%x bytes=%u %ux%u pitch=%u bpp=%u",
           (uint32_t)info.address,
@@ -1433,6 +1487,7 @@ void display_late_init(void) {
           info.height,
           info.pitch,
           (uint32_t)info.bpp);
+    KLOGI("display: gui_state_hash=%x profile=fb-shell-v1", gui_hash);
 }
 
 uint32_t display_console_enter_critical(void) {

@@ -31,6 +31,7 @@ The active follow-on is back on GUI progression:
 - keep reliability work scoped to maintenance and explicit regression gaps, not as the default growth branch
 - latest landed slice: footer HUD is now persistent and the bootstrap framebuffer font now verifies printable ASCII coverage at boot
 - latest landed creative slice: footer HUD now renders a command timeline rail (running/success/failure capsules) from existing shell lifecycle output without syscall or ABI churn
+- latest landed deterministic gate: framebuffer GUI state hash (`fb-shell-v1`) is now emitted by the kernel and asserted in `qemu-smoke-shell-core`
 
 Queued after the current GUI slices:
 
