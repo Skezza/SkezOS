@@ -54,6 +54,7 @@ static const struct display_glyph g_display_font[] = {
     { '!', { 2, 2, 2, 0, 2 } },
     { '"', { 5, 5, 0, 0, 0 } },
     { '#', { 5, 7, 5, 7, 5 } },
+    { '$', { 2, 7, 6, 3, 7 } },
     { '%', { 5, 1, 2, 4, 5 } },
     { '&', { 2, 5, 2, 5, 3 } },
     { '\'', { 2, 2, 0, 0, 0 } },
@@ -206,6 +207,8 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
 static void display_framebuffer_draw_header_metrics(void);
 static void display_framebuffer_draw_footer_hud(void);
 static uint32_t display_framebuffer_prompt_visible_cols(void);
+static int display_font_has_glyph(char c);
+static void display_verify_font_coverage(void);
 
 static void display_framebuffer_line_colors(display_line_style_t style,
                                             uint32_t *fg_pixel,
@@ -445,6 +448,35 @@ static const uint8_t *display_lookup_glyph(char c) {
         }
     }
     return g_display_font[0].rows;
+}
+
+static int display_font_has_glyph(char c) {
+    for (uint32_t i = 0; i < sizeof(g_display_font) / sizeof(g_display_font[0]); i++) {
+        if (g_display_font[i].ch == c) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void display_verify_font_coverage(void) {
+    uint32_t missing = 0U;
+    char first_missing = '?';
+
+    for (char c = ' '; c <= '~'; c++) {
+        if (!display_font_has_glyph(c)) {
+            if (missing == 0U) {
+                first_missing = c;
+            }
+            missing++;
+        }
+    }
+
+    if (missing == 0U) {
+        KLOGI("display: bootstrap font coverage printable_ascii=95/95");
+    } else {
+        KLOGW("display: bootstrap font coverage missing=%u first='%c'", missing, first_missing);
+    }
 }
 
 static uint32_t display_string_length(const char *text) {
@@ -970,6 +1002,7 @@ static void display_framebuffer_draw_shell_frame(void) {
 void display_init(void) {
     g_display_mode = DISPLAY_MODE_VGA;
     g_display_fb.ready = 0U;
+    display_verify_font_coverage();
     vga_clear();
 }
 

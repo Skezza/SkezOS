@@ -29,6 +29,7 @@ The active follow-on is back on GUI progression:
 - `Phase 11 - GUI polish and visual shell operator HUD`
 - keep shell/runtime ABI fixed while improving framebuffer readability, chrome, and operator context
 - keep reliability work scoped to maintenance and explicit regression gaps, not as the default growth branch
+- latest landed slice: footer HUD is now persistent and the bootstrap framebuffer font now verifies printable ASCII coverage at boot
 
 Queued after the current GUI slices:
 

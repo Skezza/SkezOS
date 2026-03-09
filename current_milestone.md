@@ -27,8 +27,17 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - [x] Switch active milestone text from reliability to GUI polish (`done`)
 - [x] Add framebuffer footer HUD strip with stable operator-state text (`done`)
 - [x] Keep framebuffer content viewport/prompt lane intact while reserving footer space (`done`)
-- [ ] Define the immediate next GUI slices (font coverage pass, line-density tweaks, shell chrome interactions) in this document
-- [ ] Add one deterministic visual regression check strategy note for future CI use
+- [x] Define the immediate next GUI slices (font coverage pass, line-density tweaks, shell chrome interactions) in this document (`done`)
+- [x] Add one deterministic visual regression check strategy note for future CI use (`done`, `docs/gui_visual_regression_strategy.md`)
+
+## Immediate next GUI slices
+- Slice A (font coverage + fallback): complete printable ASCII glyph coverage in the bootstrap table, keep `?` fallback, and emit one boot-time coverage log line.
+- Slice B (line density/readability): tighten glyph baseline and line marker contrast while preserving current row/column geometry and prompt lane behavior.
+- Slice C (shell chrome interactions): use existing shell state transitions (`R`/`E`/`C`) to drive subtle prompt-lane/footer state hints without new syscalls.
+
+## Visual regression strategy
+- Strategy note is tracked in `docs/gui_visual_regression_strategy.md`.
+- Initial deterministic gate: continue serial/reliability smokes and add framebuffer-render-state hashing from the display path later, before screenshot-based CI.
 
 ## Risks
 - Risk: visual tweaks can accidentally reduce text readability or prompt clarity.
@@ -42,11 +51,13 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - [x] Active planning docs identify GUI polish as the current milestone
 - [x] One concrete framebuffer UI polish slice is merged without runtime/ABI churn
 - [x] Reliability and nightly smoke chains remain green after GUI changes
-- [ ] Next two GUI slices are pre-scoped in actionable terms
+- [x] Next two GUI slices are pre-scoped in actionable terms
 
 ## Notes / decisions
 - 2026-03-09 - Reliability branch is now treated as maintenance baseline; active execution is `Phase 11 - GUI polish and visual shell operator HUD`.
 - 2026-03-09 - Landed first Phase 11 slice: framebuffer shell now reserves a footer row and renders a compact operator HUD line while preserving shell/runtime behavior.
+- 2026-03-09 - Landed next Phase 11 slice: bootstrap framebuffer font table now covers all printable ASCII glyphs, and boot logs now emit explicit coverage verification (`95/95` expected).
+- 2026-03-09 - Added deterministic visual-regression strategy note: `docs/gui_visual_regression_strategy.md`.
 - 2026-03-09 - Validation for this transition slice:
   - `make check`
   - `make check-nightly`
