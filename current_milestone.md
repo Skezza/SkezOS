@@ -1,52 +1,55 @@
 # Current Milestone
 
 ## Milestone
-Name: Phase 10 - Reliability hooks and syscall exerciser
+Name: Phase 11 - GUI polish and visual shell operator HUD
 Target window: 3-5 days
 Owner: joe + codex
 
 ## Objective
-Start the post-Phase-9 reliability branch with a small, testable operator-facing slice:
-- add one explicit userland syscall self-check tool that intentionally exercises negative/error paths
-- keep the current shell/runtime path intact while turning those checks into a normal `/bin` workflow
-- tighten the default smoke coverage so the shell regression path proves current output strings and the new reliability probe together
+Move active execution back to the GUI track with a narrow, low-risk framebuffer polish slice:
+- keep the shell/runtime model unchanged while improving the framebuffer UI readability and operator context
+- keep reliability infrastructure intact as a guardrail, not the main development branch
+- define the next GUI-focused backlog in milestone terms so work does not drift back into ad hoc reliability-only increments
 
 ## In scope
-- [x] Add a narrow userland syscall diagnostics tool that checks a few invalid/error paths
-- [x] Keep the diagnostics path shell-launchable through the normal `/bin/<name>.elf` flow
-- [x] Re-baseline the shell smoke assertions to match current shell/tool output
-- [x] Decide whether to keep extending the shell smoke path or add a dedicated reliability smoke target next
+- [x] Re-baseline active planning docs so GUI is the current milestone
+- [x] Land one narrow framebuffer HUD/chrome improvement that is visible at boot
+- [x] Preserve the current shell ABI, command model, and syscall contracts
+- [x] Keep `make check` and `make check-nightly` green with no timeout inflation
 
 ## Out of scope
-- [x] ATA or writable filesystem work in this slice
-- [x] New syscall numbers or ABI shape changes in this slice
-- [x] Broad syscall fuzzing inside the kernel itself
-- [x] Rewriting the shell parser or command model
+- [x] New userland app framework, widgets, or window manager work
+- [x] Shell parser expansion (quoting/jobs) as part of this GUI slice
+- [x] Syscall ABI growth for GUI-only concerns
+- [x] Replacing the bootstrap font asset in this slice
 
 ## Tasks
-- [x] Add `/bin/diag.elf` as a userland syscall self-check tool (`done`)
-- [x] Exercise a small set of invalid syscall paths and report pass/fail without hanging the shell (`done`)
-- [x] Wire the new tool into initramfs packaging and normal shell launch (`done`)
-- [x] Refresh `qemu-smoke-shell-core` to match current shell, tool, and diagnostics output (`done`)
-- [x] Decide on the next reliability slice: dedicated smoke target, kernel-side hooks, or broader syscall coverage (`done`)
-- [x] Expand `/bin/diag.elf` with focused `pipe`/`dup`/`dup2` negative-path + lifecycle checks and assert them in `qemu-smoke-reliability` (`done`)
+- [x] Switch active milestone text from reliability to GUI polish (`done`)
+- [x] Add framebuffer footer HUD strip with stable operator-state text (`done`)
+- [x] Keep framebuffer content viewport/prompt lane intact while reserving footer space (`done`)
+- [ ] Define the immediate next GUI slices (font coverage pass, line-density tweaks, shell chrome interactions) in this document
+- [ ] Add one deterministic visual regression check strategy note for future CI use
 
 ## Risks
-- Risk: shell smoke assertions can drift as user-visible strings evolve.
-  - Mitigation: keep the smoke path focused on stable substrings and update it whenever shell/tool output changes.
-- Risk: a “diagnostics” tool can become a pile of ad hoc tests with no milestone boundary.
-  - Mitigation: keep each slice narrow, document the exact checks covered, and add only a few stable probes at a time.
-- Risk: moving straight to ATA adds too much churn before reliability signals are in place.
-  - Mitigation: finish at least one useful reliability loop (tool + smoke evidence) before taking on block-device bring-up.
+- Risk: visual tweaks can accidentally reduce text readability or prompt clarity.
+  - Mitigation: keep each change narrow and preserve prompt/content geometry invariants.
+- Risk: GUI work can become difficult to validate in headless CI.
+  - Mitigation: keep smoke chains green and capture visual assertions as structured future tasks, not implicit assumptions.
+- Risk: milestone drift back to reliability-only work without explicit planning.
+  - Mitigation: keep reliability in maintenance mode and gate new reliability additions behind explicit GUI-scope compatibility needs.
 
 ## Exit criteria
-- [x] Active planning docs identify the reliability track as the current milestone
-- [x] The shell can launch a normal `/bin/diag.elf` tool that proves a small set of syscall error paths
-- [x] The diagnostics tool exits cleanly with a stable pass/fail line
-- [x] The default interactive smoke path checks the diagnostics tool alongside the existing shell commands
-- [x] The next worker can pick a concrete reliability follow-up without reopening the Phase 9 UI work
+- [x] Active planning docs identify GUI polish as the current milestone
+- [x] One concrete framebuffer UI polish slice is merged without runtime/ABI churn
+- [x] Reliability and nightly smoke chains remain green after GUI changes
+- [ ] Next two GUI slices are pre-scoped in actionable terms
 
 ## Notes / decisions
+- 2026-03-09 - Reliability branch is now treated as maintenance baseline; active execution is `Phase 11 - GUI polish and visual shell operator HUD`.
+- 2026-03-09 - Landed first Phase 11 slice: framebuffer shell now reserves a footer row and renders a compact operator HUD line while preserving shell/runtime behavior.
+- 2026-03-09 - Validation for this transition slice:
+  - `make check`
+  - `make check-nightly`
 - 2026-02-27 - Lifecycle hardening milestone completed: wait-driven child synchronization, process-owned FD ownership, and deterministic task-stack/loader-scratch reclamation are in place.
 - 2026-02-27 - Lifecycle hardening validation used:
   - `make qemu-smoke-phase4-repeat PHASE4_REPEAT=2`

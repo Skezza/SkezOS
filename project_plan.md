@@ -1,7 +1,7 @@
 # SkezOS Project Plan (Hobby-Realistic, AI-Assisted)
 
-## Current implementation note (2026-03-03)
-The original phase labels below are now historical scaffolding. The codebase has already delivered the shell/process milestones through the post-Phase-6 interaction slice, completed the narrow shell input follow-up, landed the first clock/timer slice (`SYS_TIME_INFO` plus `/bin/uptime.elf` and `/bin/sleep.elf`), and effectively completed the display-first milestone (`Phase 9 - Framebuffer bring-up and visual shell`). The active follow-on is now a narrow reliability milestone: `Phase 10 - Reliability hooks and syscall exerciser`. The first concrete slice is deliberately small: a normal shell-launchable `/bin/diag.elf` tool now exercises a few invalid syscall paths and reports pass/fail, so the project has a lightweight operator-facing reliability probe before broader kernel hooks or block-device work land.
+## Current implementation note (2026-03-09)
+The original phase labels below are now historical scaffolding. The codebase has already delivered the shell/process milestones through the post-Phase-6 interaction slice, completed the narrow shell input follow-up, landed the first clock/timer slice (`SYS_TIME_INFO` plus `/bin/uptime.elf` and `/bin/sleep.elf`), and delivered the display-first baseline (`Phase 9 - Framebuffer bring-up and visual shell`). The reliability branch (`Phase 10`) is now in maintenance mode with stable operator probes, structured JSON contracts, replay hash gating, and CI artifact/report plumbing. Active execution has moved back to GUI progression: `Phase 11 - GUI polish and visual shell operator HUD`.
 
 ## 1) Current baseline
 SkezOS currently boots via GRUB/Multiboot2 into a 32-bit kernel and includes:

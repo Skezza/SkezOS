@@ -162,7 +162,7 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
 #define DISPLAY_FB_GLYPH_X_PAD 3U
 #define DISPLAY_FB_GLYPH_Y_PAD 1U
 #define DISPLAY_FB_HEADER_ROWS 1U
-#define DISPLAY_FB_FOOTER_ROWS 0U
+#define DISPLAY_FB_FOOTER_ROWS 1U
 #define DISPLAY_FB_PANEL_MARGIN_X 16U
 #define DISPLAY_FB_PANEL_MARGIN_Y 4U
 #define DISPLAY_FB_PANEL_BORDER 1U
@@ -204,6 +204,7 @@ static void display_append_u32(char *dst, uint32_t *len, uint32_t cap, uint32_t 
 static void display_append_mib_value(char *dst, uint32_t *len, uint32_t cap, uint32_t frame_count);
 static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_t cap);
 static void display_framebuffer_draw_header_metrics(void);
+static void display_framebuffer_draw_footer_hud(void);
 static uint32_t display_framebuffer_prompt_visible_cols(void);
 
 static void display_framebuffer_line_colors(display_line_style_t style,
@@ -359,6 +360,7 @@ static void display_framebuffer_draw_prompt_strip_idle(void) {
         "INPUT",
         prompt_fg,
         prompt_bg);
+    display_framebuffer_draw_footer_hud();
 }
 
 static void display_framebuffer_redraw_current_line(void) {
@@ -715,6 +717,27 @@ static void display_framebuffer_draw_header_metrics(void) {
         metrics_shadow);
 }
 
+static void display_framebuffer_draw_footer_hud(void) {
+#if DISPLAY_FB_FOOTER_ROWS > 0
+    uint32_t footer_top = g_display_fb.info.height - (DISPLAY_FB_FOOTER_ROWS * DISPLAY_FB_CHAR_H);
+    uint32_t footer_bg = display_framebuffer_pack_rgb(11U, 18U, 32U);
+    uint32_t footer_fg = display_framebuffer_pack_rgb(215U, 226U, 242U);
+
+    display_framebuffer_fill_rect_packed(
+        0U,
+        footer_top,
+        g_display_fb.info.width,
+        DISPLAY_FB_CHAR_H,
+        footer_bg);
+    display_framebuffer_draw_text_packed(
+        DISPLAY_FB_CHAR_W,
+        footer_top + 1U,
+        "GUI HUD  INPUT:/DEV/CONSOLE  PARSER:WS  MODE:FG  PIPE+REDIR:ON",
+        footer_fg,
+        footer_bg);
+#endif
+}
+
 static void display_framebuffer_scroll_if_needed(void) {
     uint32_t line_bytes;
     uint32_t scroll_bottom_px;
@@ -902,14 +925,6 @@ static void display_framebuffer_draw_shell_frame(void) {
         0U, 0U, g_display_fb.info.width, DISPLAY_FB_CHAR_H, title_bg);
     display_framebuffer_fill_rect_packed(0U, DISPLAY_FB_CHAR_H - 2U, g_display_fb.info.width, 2U, accent);
     display_framebuffer_fill_rect_packed(panel_left, panel_top, panel_width, panel_height, panel_border);
-#if DISPLAY_FB_FOOTER_ROWS > 0
-    display_framebuffer_fill_rect_packed(
-        0U,
-        g_display_fb.info.height - (DISPLAY_FB_FOOTER_ROWS * DISPLAY_FB_CHAR_H),
-        g_display_fb.info.width,
-        DISPLAY_FB_CHAR_H,
-        display_framebuffer_pack_rgb(11U, 18U, 32U));
-#endif
     display_framebuffer_fill_rect_packed(
         g_display_fb.content_left_px - DISPLAY_FB_LINE_GUTTER_TOTAL,
         g_display_fb.content_top_px,
@@ -949,6 +964,7 @@ static void display_framebuffer_draw_shell_frame(void) {
         badge_fg,
         accent);
     display_framebuffer_draw_header_metrics();
+    display_framebuffer_draw_footer_hud();
 }
 
 void display_init(void) {

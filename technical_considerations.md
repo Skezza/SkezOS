@@ -1,6 +1,6 @@
 # SkezOS Technical Considerations
 
-## Current sequencing note (2026-03-05)
+## Current sequencing note (2026-03-09)
 
 The post-Phase-6 interaction milestone and the narrow timing follow-up are now delivered:
 
@@ -19,22 +19,21 @@ The display-first milestone is now effectively complete enough to stop treating 
 - `Phase 9 - Framebuffer bring-up and visual shell` delivered the visual shell surface, framebuffer mapping, tighter chrome, denser glyph rendering, and the current shell-readability passes
 - the shell/runtime path stayed intact while the display path moved behind the `display` abstraction
 
-The active follow-on is now a narrow reliability milestone:
+The reliability branch is now maintenance baseline, not the active planning lane:
 
-- `Phase 10 - Reliability hooks and syscall exerciser`
-- first landed slice: `/bin/diag.elf` became a normal shell-launchable tool for a few invalid syscall paths and stable pass/fail reporting
-- second landed slice: `diag` now also covers focused `pipe`/`dup`/`dup2` checks (invalid pointers/FIDs plus pipe EOF and broken-pipe paths), and `qemu-smoke-reliability` asserts those lines directly
+- `Phase 10 - Reliability hooks and syscall exerciser` delivered `/bin/diag.elf`, expanded deterministic negative-path coverage, structured JSON contracts, replay hash gating, and CI artifact/report plumbing
+- `qemu-smoke-reliability`, `qemu-smoke-reliability-replay`, and `qemu-smoke-reliability-fuzz-lite-matrix` remain the guardrails for runtime regressions
 
-Guardrails for this reliability track:
+The active follow-on is back on GUI progression:
 
-- keep it narrow and observable; prefer a few stable probes over broad noisy fuzzing
-- keep the operator path shell-first; diagnostics should behave like ordinary `/bin` tools unless a deeper kernel-only hook is truly needed
-- preserve the serial-first debug path and the existing smoke coverage while reliability probes land
-- the prior "crowded Phase 6 smoke flow" concern is resolved by freezing `qemu-smoke-shell-core` and splitting reliability checks into `qemu-smoke-reliability`
+- `Phase 11 - GUI polish and visual shell operator HUD`
+- keep shell/runtime ABI fixed while improving framebuffer readability, chrome, and operator context
+- keep reliability work scoped to maintenance and explicit regression gaps, not as the default growth branch
 
-Queued after the current reliability slices:
+Queued after the current GUI slices:
 
-- broader syscall coverage or structured kernel-side test hooks
+- font-coverage and density polish
+- deterministic visual regression strategy (artifact/screenshot or framebuffer hash)
 - ATA PIO / block-device bring-up
 
 Historical planning context for the just-completed post-Phase-6 slice lives in `docs/next_phase_handover.md`.
