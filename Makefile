@@ -25,12 +25,14 @@ RELIABILITY_SCENARIO_TIMEOUT_SECS ?= 70
 RELIABILITY_SMOKE_STEP_SECS ?= 0.20
 RELIABILITY_SMOKE_RUNNER_SETTLE_SECS ?= 1.50
 RELIABILITY_SMOKE_DIAG_SETTLE_SECS ?= 1.00
+RELIABILITY_REPLAY_RUNNER_SETTLE_SECS ?= 1.50
+RELIABILITY_FUZZ_RUNNER_SETTLE_SECS ?= 1.50
 SMOKE_MARKER = SKEZOS_SMOKE_READY
 RELIABILITY_JSON_VALIDATOR = ./scripts/validate_reliability_json.sh
 RELIABILITY_JSON_REPORTER = ./scripts/reliability_json_report.sh
 REPLAY_HASH_ALL_SEED1337 ?= 2002305826
 REPLAY_HASH_QUICK_SEED1337 ?= 2923080070
-GUI_STATE_HASH_FB_SHELL_V2 ?= 0x87FE4975
+GUI_STATE_HASH_FB_SHELL_V3 ?= 0x378E9E02
 PHASE4_REPEAT ?= 3
 USERLAND_BUILD = $(BUILD)/userland
 INITRAMFS_STAGING = $(BUILD)/initramfs_root
@@ -550,7 +552,7 @@ qemu-smoke-shell-core: $(ISO)
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log,$(SHELL_CORE_SMOKE_SCRIPT))
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log)
 	@if grep -Fq "display: framebuffer console active" $(BUILD)/qemu-smoke-shell-core.log; then \
-		if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V2) profile=fb-shell-v2" $(BUILD)/qemu-smoke-shell-core.log; then \
+		if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V3) profile=fb-shell-v3" $(BUILD)/qemu-smoke-shell-core.log; then \
 			echo "[qemu-smoke-shell-core] Missing or changed framebuffer GUI state hash"; \
 			tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 			exit 1; \
@@ -866,11 +868,11 @@ qemu-smoke-reliability-replay: $(ISO)
 	@rc=0; \
 	{ sleep 12; \
 		printf 'cd /bin\n'; \
-		sleep 0.25; \
+		sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 		printf 'reliability_runner --replay=all_seed1337\n'; \
-		sleep 0.25; \
+		sleep $(RELIABILITY_REPLAY_RUNNER_SETTLE_SECS); \
 		printf 'reliability_runner --replay=quick_seed1337\n'; \
-		sleep 0.25; \
+		sleep $(RELIABILITY_REPLAY_RUNNER_SETTLE_SECS); \
 		printf 'exit\n'; \
 	} | \
 	timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \
@@ -929,13 +931,13 @@ qemu-smoke-reliability-fuzz-lite-matrix: $(ISO)
 	@rc=0; \
 	{ sleep 12; \
 		printf 'cd /bin\n'; \
-		sleep 0.25; \
+		sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 		printf 'reliability_runner --seed=1337 --script=all --fuzz-lite=1\n'; \
-		sleep 0.25; \
+		sleep $(RELIABILITY_FUZZ_RUNNER_SETTLE_SECS); \
 		printf 'reliability_runner --seed=1337 --script=all --fuzz-lite=2\n'; \
-		sleep 0.25; \
+		sleep $(RELIABILITY_FUZZ_RUNNER_SETTLE_SECS); \
 		printf 'reliability_runner --seed=1337 --script=all --fuzz-lite=3\n'; \
-		sleep 0.25; \
+		sleep $(RELIABILITY_FUZZ_RUNNER_SETTLE_SECS); \
 		printf 'exit\n'; \
 	} | \
 	timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \

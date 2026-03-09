@@ -30,6 +30,13 @@ typedef enum {
     DISPLAY_TIMELINE_EVENT_RUNNING = 2,
 } display_timeline_event_t;
 
+typedef enum {
+    DISPLAY_PROMPT_HINT_INPUT = 0,
+    DISPLAY_PROMPT_HINT_RUNNING = 1,
+    DISPLAY_PROMPT_HINT_OK = 2,
+    DISPLAY_PROMPT_HINT_FAIL = 3,
+} display_prompt_hint_t;
+
 struct display_timeline_entry {
     uint16_t duration_ticks;
     uint8_t event;
@@ -64,6 +71,9 @@ struct display_framebuffer_state {
     uint8_t command_active;
     uint32_t command_start_ticks;
     char command_tag;
+    uint8_t prompt_hint;
+    uint32_t prompt_hint_until_ticks;
+    char prompt_hint_tag;
     uint8_t ready;
 };
 
@@ -191,6 +201,7 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
     (DISPLAY_FB_LINE_GUTTER_WIDTH + DISPLAY_FB_LINE_GUTTER_GAP)
 #define DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS 7U
 #define DISPLAY_FB_PROMPT_STATUS_RESERVE_COLS 0U
+#define DISPLAY_FB_PROMPT_HINT_HOLD_TICKS 120U
 #define DISPLAY_FB_TIMELINE_CAP 24U
 #define DISPLAY_FB_TIMELINE_RAIL_INSET 4U
 
@@ -353,16 +364,103 @@ static void display_framebuffer_clear_scroll_row(uint32_t row) {
         display_framebuffer_pack_rgb(0U, 0U, 0U));
 }
 
+static uint32_t display_ticks32(void) {
+    return (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL);
+}
+
+static void display_prompt_hint_set(display_prompt_hint_t hint, char tag, uint32_t hold_ticks) {
+    g_display_fb.prompt_hint = (uint8_t)hint;
+    g_display_fb.prompt_hint_tag = tag;
+    if (hold_ticks == 0U) {
+        g_display_fb.prompt_hint_until_ticks = 0U;
+        return;
+    }
+    g_display_fb.prompt_hint_until_ticks = display_ticks32() + hold_ticks;
+}
+
+static void display_prompt_hint_refresh(void) {
+    uint32_t now_ticks;
+
+    if (g_display_fb.command_active != 0U) {
+        return;
+    }
+    if (g_display_fb.prompt_hint != DISPLAY_PROMPT_HINT_OK &&
+        g_display_fb.prompt_hint != DISPLAY_PROMPT_HINT_FAIL) {
+        return;
+    }
+    if (g_display_fb.prompt_hint_until_ticks == 0U) {
+        display_prompt_hint_set(DISPLAY_PROMPT_HINT_INPUT, '?', 0U);
+        return;
+    }
+    now_ticks = display_ticks32();
+    if ((int32_t)(now_ticks - g_display_fb.prompt_hint_until_ticks) >= 0) {
+        display_prompt_hint_set(DISPLAY_PROMPT_HINT_INPUT, '?', 0U);
+    }
+}
+
 static void display_framebuffer_draw_prompt_strip_idle(void) {
     uint32_t prompt_top = g_display_fb.content_top_px + (g_display_fb.scroll_rows * DISPLAY_FB_CHAR_H);
     uint32_t prompt_fg = display_framebuffer_pack_rgb(248U, 242U, 214U);
     uint32_t prompt_bg = display_framebuffer_pack_rgb(12U, 22U, 42U);
     uint32_t prompt_well_bg = display_framebuffer_pack_rgb(6U, 14U, 30U);
     uint32_t prompt_accent = display_framebuffer_pack_rgb(86U, 178U, 244U);
+    char status_label[8] = { 'I', 'N', 'P', 'U', 'T', '\0', '\0', '\0' };
+    char tag = g_display_fb.prompt_hint_tag;
     uint32_t prompt_text_left =
         g_display_fb.content_left_px + (DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS * DISPLAY_FB_CHAR_W);
     uint32_t prompt_text_width = display_framebuffer_prompt_visible_cols() * DISPLAY_FB_CHAR_W;
     uint32_t separator_x = prompt_text_left - (DISPLAY_FB_CHAR_W / 2U);
+
+    display_prompt_hint_refresh();
+    if (tag >= 'a' && tag <= 'z') {
+        tag = (char)(tag - ('a' - 'A'));
+    }
+    switch ((display_prompt_hint_t)g_display_fb.prompt_hint) {
+    case DISPLAY_PROMPT_HINT_RUNNING:
+        prompt_fg = display_framebuffer_pack_rgb(232U, 243U, 255U);
+        prompt_well_bg = display_framebuffer_pack_rgb(8U, 18U, 36U);
+        prompt_accent = display_framebuffer_pack_rgb(64U, 146U, 220U);
+        status_label[0] = 'R';
+        status_label[1] = 'U';
+        status_label[2] = 'N';
+        status_label[3] = '\0';
+        if ((tag >= 'A' && tag <= 'Z') || (tag >= '0' && tag <= '9')) {
+            status_label[3] = ' ';
+            status_label[4] = tag;
+            status_label[5] = '\0';
+        }
+        break;
+    case DISPLAY_PROMPT_HINT_OK:
+        prompt_fg = display_framebuffer_pack_rgb(228U, 252U, 239U);
+        prompt_well_bg = display_framebuffer_pack_rgb(8U, 24U, 21U);
+        prompt_accent = display_framebuffer_pack_rgb(74U, 204U, 148U);
+        status_label[0] = 'O';
+        status_label[1] = 'K';
+        status_label[2] = '\0';
+        if ((tag >= 'A' && tag <= 'Z') || (tag >= '0' && tag <= '9')) {
+            status_label[2] = ' ';
+            status_label[3] = tag;
+            status_label[4] = '\0';
+        }
+        break;
+    case DISPLAY_PROMPT_HINT_FAIL:
+        prompt_fg = display_framebuffer_pack_rgb(255U, 226U, 221U);
+        prompt_well_bg = display_framebuffer_pack_rgb(34U, 10U, 13U);
+        prompt_accent = display_framebuffer_pack_rgb(228U, 96U, 86U);
+        status_label[0] = 'E';
+        status_label[1] = 'R';
+        status_label[2] = 'R';
+        status_label[3] = '\0';
+        if ((tag >= 'A' && tag <= 'Z') || (tag >= '0' && tag <= '9')) {
+            status_label[3] = ' ';
+            status_label[4] = tag;
+            status_label[5] = '\0';
+        }
+        break;
+    case DISPLAY_PROMPT_HINT_INPUT:
+    default:
+        break;
+    }
 
     display_framebuffer_draw_header_metrics();
 
@@ -394,7 +492,7 @@ static void display_framebuffer_draw_prompt_strip_idle(void) {
     display_framebuffer_draw_text_packed(
         g_display_fb.content_left_px + DISPLAY_FB_CHAR_W,
         prompt_top + 2U,
-        "INPUT",
+        status_label,
         prompt_fg,
         prompt_bg);
 }
@@ -522,7 +620,7 @@ static uint32_t display_hash_u32(uint32_t hash, uint32_t value) {
 static uint32_t display_compute_gui_state_hash(void) {
     uint32_t hash = 2166136261U;
 
-    hash = display_hash_u32(hash, 0x46425332U); /* "FBS2" */
+    hash = display_hash_u32(hash, 0x46425333U); /* "FBS3" */
     hash = display_hash_u32(hash, g_display_fb.info.width);
     hash = display_hash_u32(hash, g_display_fb.info.height);
     hash = display_hash_u32(hash, g_display_fb.info.pitch);
@@ -543,6 +641,7 @@ static uint32_t display_compute_gui_state_hash(void) {
     hash = display_hash_u32(hash, DISPLAY_FB_LINE_GUTTER_TOTAL);
     hash = display_hash_u32(hash, DISPLAY_FB_HEADER_ROWS);
     hash = display_hash_u32(hash, DISPLAY_FB_FOOTER_ROWS);
+    hash = display_hash_u32(hash, DISPLAY_FB_PROMPT_HINT_HOLD_TICKS);
     hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_CAP);
     hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_RAIL_INSET);
 
@@ -563,6 +662,9 @@ static uint32_t display_compute_gui_state_hash(void) {
     hash = display_hash_u32(hash, display_framebuffer_pack_rgb(18U, 40U, 86U));
     hash = display_hash_u32(hash, display_framebuffer_pack_rgb(248U, 182U, 86U));
     hash = display_hash_u32(hash, display_framebuffer_pack_rgb(44U, 60U, 84U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(8U, 18U, 36U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(8U, 24U, 21U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(34U, 10U, 13U));
 
     return hash;
 }
@@ -703,10 +805,12 @@ static void display_timeline_push_event(display_timeline_event_t event,
 static void display_timeline_finish_active(int success) {
     uint32_t now_ticks;
     uint32_t duration_ticks;
+    char tag;
 
     if (g_display_fb.command_active == 0U) {
         return;
     }
+    tag = g_display_fb.command_tag;
     now_ticks = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL);
     duration_ticks = now_ticks - g_display_fb.command_start_ticks;
     if (duration_ticks == 0U) {
@@ -714,9 +818,12 @@ static void display_timeline_finish_active(int success) {
     }
     display_timeline_push_event(success ? DISPLAY_TIMELINE_EVENT_OK : DISPLAY_TIMELINE_EVENT_FAIL,
                                 duration_ticks,
-                                g_display_fb.command_tag);
+                                tag);
     g_display_fb.command_active = 0U;
     g_display_fb.command_tag = '?';
+    display_prompt_hint_set(success ? DISPLAY_PROMPT_HINT_OK : DISPLAY_PROMPT_HINT_FAIL,
+                            tag,
+                            DISPLAY_FB_PROMPT_HINT_HOLD_TICKS);
 }
 
 static void display_timeline_start_command(char tag) {
@@ -726,6 +833,7 @@ static void display_timeline_start_command(char tag) {
     g_display_fb.command_active = 1U;
     g_display_fb.command_start_ticks = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL);
     g_display_fb.command_tag = tag;
+    display_prompt_hint_set(DISPLAY_PROMPT_HINT_RUNNING, tag, 0U);
 }
 
 static void display_framebuffer_on_line_complete(const char *text,
@@ -734,6 +842,7 @@ static void display_framebuffer_on_line_complete(const char *text,
     int32_t exit_code = 0;
     char tag = '?';
     int footer_dirty = 0;
+    int prompt_dirty = 0;
 
     if (len == 0U || text == 0) {
         return;
@@ -742,6 +851,7 @@ static void display_framebuffer_on_line_complete(const char *text,
         if (display_parse_prompt_command(text, len, &tag)) {
             display_timeline_start_command(tag);
             footer_dirty = 1;
+            prompt_dirty = 1;
         }
     } else if (g_display_fb.command_active != 0U) {
         if (display_line_contains(text, len, "run: launch failed") ||
@@ -749,15 +859,21 @@ static void display_framebuffer_on_line_complete(const char *text,
             display_line_contains(text, len, "spawn failed")) {
             display_timeline_finish_active(0);
             footer_dirty = 1;
+            prompt_dirty = 1;
         } else if (display_parse_wait_exit_code(text, len, &exit_code)) {
             display_timeline_finish_active(exit_code == 0);
             footer_dirty = 1;
+            prompt_dirty = 1;
         } else if (display_line_starts_with(text, len, "sh: exit")) {
             display_timeline_finish_active(1);
             footer_dirty = 1;
+            prompt_dirty = 1;
         }
     }
 
+    if (prompt_dirty != 0 && g_display_fb.ready != 0U) {
+        display_framebuffer_draw_prompt_strip_idle();
+    }
     if (footer_dirty != 0 && g_display_fb.ready != 0U) {
         display_framebuffer_draw_footer_hud();
     }
@@ -1375,6 +1491,9 @@ void display_init(void) {
     g_display_fb.command_active = 0U;
     g_display_fb.command_start_ticks = 0U;
     g_display_fb.command_tag = '?';
+    g_display_fb.prompt_hint = DISPLAY_PROMPT_HINT_INPUT;
+    g_display_fb.prompt_hint_until_ticks = 0U;
+    g_display_fb.prompt_hint_tag = '?';
     display_verify_font_coverage();
     vga_clear();
 }
@@ -1486,6 +1605,9 @@ void display_late_init(void) {
     g_display_fb.command_active = 0U;
     g_display_fb.command_start_ticks = 0U;
     g_display_fb.command_tag = '?';
+    g_display_fb.prompt_hint = DISPLAY_PROMPT_HINT_INPUT;
+    g_display_fb.prompt_hint_until_ticks = 0U;
+    g_display_fb.prompt_hint_tag = '?';
     g_display_fb.ready = 1U;
 
     display_framebuffer_draw_shell_frame();
@@ -1500,7 +1622,7 @@ void display_late_init(void) {
           info.height,
           info.pitch,
           (uint32_t)info.bpp);
-    KLOGI("display: gui_state_hash=%x profile=fb-shell-v2", gui_hash);
+    KLOGI("display: gui_state_hash=%x profile=fb-shell-v3", gui_hash);
 }
 
 uint32_t display_console_enter_critical(void) {

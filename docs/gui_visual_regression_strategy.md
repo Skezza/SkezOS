@@ -27,6 +27,6 @@ Add deterministic GUI-regression signals without requiring fragile screenshot co
 - `make check` and `make check-nightly` continue to pass without timeout changes.
 
 ## Current status (2026-03-09)
-- Implemented for profile `fb-shell-v2`:
-  - kernel emits `display: gui_state_hash=... profile=fb-shell-v2`
+- Implemented for profile `fb-shell-v3`:
+  - kernel emits `display: gui_state_hash=... profile=fb-shell-v3`
   - `qemu-smoke-shell-core` asserts expected hash when framebuffer mode is active
