@@ -71,7 +71,7 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/busybox.elf \
 	$(USERLAND_BUILD)/reliability_runner.elf
 
-.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability check check-pr check-release check-nightly
+.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix check check-pr check-release check-nightly
 
 all: $(ISO)
 
@@ -841,6 +841,114 @@ qemu-smoke-reliability: $(ISO)
 	fi
 	@echo "[qemu-smoke-reliability] PASS"
 
+qemu-smoke-reliability-replay: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-reliability-replay.log
+	@echo "[qemu-smoke-reliability-replay] Booting headless VM with replay profiles..."
+	@rc=0; \
+	{ sleep 12; \
+		printf 'cd /bin\n'; \
+		sleep 0.25; \
+		printf 'reliability_runner --replay=all_seed1337\n'; \
+		sleep 0.25; \
+		printf 'reliability_runner --replay=quick_seed1337\n'; \
+		sleep 0.25; \
+		printf 'exit\n'; \
+	} | \
+	timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \
+		-cdrom $(ISO) \
+		-display none \
+		-serial mon:stdio \
+		-monitor none \
+		-no-reboot \
+		-no-shutdown > $(BUILD)/qemu-smoke-reliability-replay.log 2>&1 || rc=$$?; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
+		echo "[qemu-smoke-reliability-replay] QEMU failed (exit $$rc)."; \
+		exit $$rc; \
+	fi
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability-replay,$(BUILD)/qemu-smoke-reliability-replay.log)
+	@if ! grep -Fq '{"type":"meta_ext","replay":"all_seed1337","fuzz_lite":0}' $(BUILD)/qemu-smoke-reliability-replay.log; then \
+		echo "[qemu-smoke-reliability-replay] Missing replay profile all_seed1337 meta_ext"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"meta_ext","replay":"quick_seed1337","fuzz_lite":0}' $(BUILD)/qemu-smoke-reliability-replay.log; then \
+		echo "[qemu-smoke-reliability-replay] Missing replay profile quick_seed1337 meta_ext"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"summary","total":3,"failures":0,"ok":true}' $(BUILD)/qemu-smoke-reliability-replay.log; then \
+		echo "[qemu-smoke-reliability-replay] Missing full replay summary"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"summary","total":1,"failures":0,"ok":true}' $(BUILD)/qemu-smoke-reliability-replay.log; then \
+		echo "[qemu-smoke-reliability-replay] Missing quick replay summary"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sh: exit" $(BUILD)/qemu-smoke-reliability-replay.log; then \
+		echo "[qemu-smoke-reliability-replay] Missing shell exit line"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-reliability-replay] PASS"
+
+qemu-smoke-reliability-fuzz-lite-matrix: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-reliability-fuzz-lite.log
+	@echo "[qemu-smoke-reliability-fuzz-lite-matrix] Booting headless VM with fuzz-lite matrix..."
+	@rc=0; \
+	{ sleep 12; \
+		printf 'cd /bin\n'; \
+		sleep 0.25; \
+		printf 'reliability_runner --seed=1337 --script=all --fuzz-lite=1\n'; \
+		sleep 0.25; \
+		printf 'reliability_runner --seed=1337 --script=all --fuzz-lite=2\n'; \
+		sleep 0.25; \
+		printf 'reliability_runner --seed=1337 --script=all --fuzz-lite=3\n'; \
+		sleep 0.25; \
+		printf 'exit\n'; \
+	} | \
+	timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \
+		-cdrom $(ISO) \
+		-display none \
+		-serial mon:stdio \
+		-monitor none \
+		-no-reboot \
+		-no-shutdown > $(BUILD)/qemu-smoke-reliability-fuzz-lite.log 2>&1 || rc=$$?; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
+		echo "[qemu-smoke-reliability-fuzz-lite-matrix] QEMU failed (exit $$rc)."; \
+		exit $$rc; \
+	fi
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability-fuzz-lite-matrix,$(BUILD)/qemu-smoke-reliability-fuzz-lite.log)
+	@if [ "$$(grep -Fc '"type":"meta_ext","replay":"-","fuzz_lite":1' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing fuzz-lite=1 meta_ext"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc '"type":"meta_ext","replay":"-","fuzz_lite":2' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing fuzz-lite=2 meta_ext"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc '"type":"meta_ext","replay":"-","fuzz_lite":3' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing fuzz-lite=3 meta_ext"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc '{"type":"summary","total":3,"failures":0,"ok":true}' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 3 ]; then \
+		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing one or more fuzz-lite summaries"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sh: exit" $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; then \
+		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing shell exit line"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-reliability-fuzz-lite-matrix] PASS"
+
 check-pr:
 	@$(MAKE) toolchain-check
 	@$(MAKE) clean
@@ -855,6 +963,8 @@ check-release: check-pr
 	@$(MAKE) qemu-smoke-lifecycle
 
 check-nightly: check-release
+	@$(MAKE) qemu-smoke-reliability-replay
+	@$(MAKE) qemu-smoke-reliability-fuzz-lite-matrix
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.elf
