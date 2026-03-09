@@ -24,6 +24,18 @@ typedef enum {
     DISPLAY_LINE_STYLE_TASK = 4,
 } display_line_style_t;
 
+typedef enum {
+    DISPLAY_TIMELINE_EVENT_OK = 0,
+    DISPLAY_TIMELINE_EVENT_FAIL = 1,
+    DISPLAY_TIMELINE_EVENT_RUNNING = 2,
+} display_timeline_event_t;
+
+struct display_timeline_entry {
+    uint16_t duration_ticks;
+    uint8_t event;
+    char tag;
+};
+
 struct display_glyph {
     char ch;
     uint8_t rows[5];
@@ -46,6 +58,12 @@ struct display_framebuffer_state {
     char line_text[128];
     uint32_t line_len;
     display_line_style_t line_style;
+    struct display_timeline_entry timeline[24];
+    uint32_t timeline_count;
+    uint32_t timeline_head;
+    uint8_t command_active;
+    uint32_t command_start_ticks;
+    char command_tag;
     uint8_t ready;
 };
 
@@ -173,6 +191,8 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
     (DISPLAY_FB_LINE_GUTTER_WIDTH + DISPLAY_FB_LINE_GUTTER_GAP)
 #define DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS 7U
 #define DISPLAY_FB_PROMPT_STATUS_RESERVE_COLS 0U
+#define DISPLAY_FB_TIMELINE_CAP 24U
+#define DISPLAY_FB_TIMELINE_RAIL_INSET 4U
 
 static uint32_t display_framebuffer_pack_rgb(uint8_t r, uint8_t g, uint8_t b);
 static void display_framebuffer_fill_rect_packed(uint32_t x, uint32_t y,
@@ -209,6 +229,18 @@ static void display_framebuffer_draw_footer_hud(void);
 static uint32_t display_framebuffer_prompt_visible_cols(void);
 static int display_font_has_glyph(char c);
 static void display_verify_font_coverage(void);
+static int display_line_starts_with(const char *text, uint32_t len, const char *prefix);
+static int display_line_contains(const char *text, uint32_t len, const char *needle);
+static int display_parse_wait_exit_code(const char *text, uint32_t len, int32_t *out_exit_code);
+static int display_parse_prompt_command(const char *text, uint32_t len, char *out_tag);
+static void display_timeline_push_event(display_timeline_event_t event,
+                                        uint32_t duration_ticks,
+                                        char tag);
+static void display_timeline_finish_active(int success);
+static void display_timeline_start_command(char tag);
+static void display_framebuffer_on_line_complete(const char *text,
+                                                 uint32_t len,
+                                                 display_line_style_t style);
 
 static void display_framebuffer_line_colors(display_line_style_t style,
                                             uint32_t *fg_pixel,
@@ -488,6 +520,191 @@ static uint32_t display_string_length(const char *text) {
     return len;
 }
 
+static int display_line_starts_with(const char *text, uint32_t len, const char *prefix) {
+    uint32_t i = 0U;
+
+    while (prefix[i] != '\0') {
+        if (i >= len || text[i] != prefix[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
+
+static int display_line_contains(const char *text, uint32_t len, const char *needle) {
+    uint32_t nlen = display_string_length(needle);
+
+    if (nlen == 0U || len < nlen) {
+        return 0;
+    }
+    for (uint32_t i = 0U; i + nlen <= len; i++) {
+        uint32_t j = 0U;
+        while (j < nlen && text[i + j] == needle[j]) {
+            j++;
+        }
+        if (j == nlen) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int display_parse_wait_exit_code(const char *text, uint32_t len, int32_t *out_exit_code) {
+    uint32_t i = 0U;
+
+    if (!display_line_contains(text, len, "[INFO] sys_waitpid:")) {
+        return 0;
+    }
+    while (i + 5U <= len) {
+        if (text[i] == 'e' && text[i + 1U] == 'x' && text[i + 2U] == 'i' &&
+            text[i + 3U] == 't' && text[i + 4U] == '=') {
+            uint32_t pos = i + 5U;
+            int sign = 1;
+            int32_t value = 0;
+            int saw_digit = 0;
+
+            if (pos < len && text[pos] == '-') {
+                sign = -1;
+                pos++;
+            }
+            while (pos < len && text[pos] >= '0' && text[pos] <= '9') {
+                value = (value * 10) + (int32_t)(text[pos] - '0');
+                saw_digit = 1;
+                pos++;
+            }
+            if (!saw_digit) {
+                return 0;
+            }
+            if (out_exit_code != 0) {
+                *out_exit_code = value * sign;
+            }
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}
+
+static int display_parse_prompt_command(const char *text, uint32_t len, char *out_tag) {
+    uint32_t cmd_start = len;
+    uint32_t token_end;
+    char tag = '?';
+
+    for (uint32_t i = 0U; i + 1U < len; i++) {
+        if ((text[i] == '$' || text[i] == '#') && text[i + 1U] == ' ') {
+            cmd_start = i + 2U;
+        }
+    }
+    if (cmd_start >= len) {
+        return 0;
+    }
+    while (cmd_start < len && text[cmd_start] == ' ') {
+        cmd_start++;
+    }
+    if (cmd_start >= len) {
+        return 0;
+    }
+
+    token_end = cmd_start;
+    while (token_end < len && text[token_end] != ' ') {
+        token_end++;
+    }
+    for (uint32_t i = cmd_start; i < token_end; i++) {
+        char c = text[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            tag = c;
+            break;
+        }
+    }
+    if (tag >= 'a' && tag <= 'z') {
+        tag = (char)(tag - ('a' - 'A'));
+    }
+    if (out_tag != 0) {
+        *out_tag = tag;
+    }
+    return 1;
+}
+
+static void display_timeline_push_event(display_timeline_event_t event,
+                                        uint32_t duration_ticks,
+                                        char tag) {
+    struct display_timeline_entry *entry = &g_display_fb.timeline[g_display_fb.timeline_head];
+
+    if (duration_ticks > 0xFFFFU) {
+        duration_ticks = 0xFFFFU;
+    }
+    entry->event = (uint8_t)event;
+    entry->duration_ticks = (uint16_t)duration_ticks;
+    entry->tag = tag;
+
+    g_display_fb.timeline_head = (g_display_fb.timeline_head + 1U) % DISPLAY_FB_TIMELINE_CAP;
+    if (g_display_fb.timeline_count < DISPLAY_FB_TIMELINE_CAP) {
+        g_display_fb.timeline_count++;
+    }
+}
+
+static void display_timeline_finish_active(int success) {
+    uint32_t now_ticks;
+    uint32_t duration_ticks;
+
+    if (g_display_fb.command_active == 0U) {
+        return;
+    }
+    now_ticks = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL);
+    duration_ticks = now_ticks - g_display_fb.command_start_ticks;
+    if (duration_ticks == 0U) {
+        duration_ticks = 1U;
+    }
+    display_timeline_push_event(success ? DISPLAY_TIMELINE_EVENT_OK : DISPLAY_TIMELINE_EVENT_FAIL,
+                                duration_ticks,
+                                g_display_fb.command_tag);
+    g_display_fb.command_active = 0U;
+    g_display_fb.command_tag = '?';
+}
+
+static void display_timeline_start_command(char tag) {
+    if (g_display_fb.command_active != 0U) {
+        display_timeline_finish_active(1);
+    }
+    g_display_fb.command_active = 1U;
+    g_display_fb.command_start_ticks = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL);
+    g_display_fb.command_tag = tag;
+}
+
+static void display_framebuffer_on_line_complete(const char *text,
+                                                 uint32_t len,
+                                                 display_line_style_t style) {
+    int32_t exit_code = 0;
+    char tag = '?';
+
+    if (len == 0U || text == 0) {
+        return;
+    }
+    if (style == DISPLAY_LINE_STYLE_PROMPT) {
+        if (display_parse_prompt_command(text, len, &tag)) {
+            display_timeline_start_command(tag);
+        }
+        return;
+    }
+    if (g_display_fb.command_active == 0U) {
+        return;
+    }
+    if (display_line_contains(text, len, "run: launch failed") ||
+        display_line_contains(text, len, "run: redirect open failed") ||
+        display_line_contains(text, len, "spawn failed")) {
+        display_timeline_finish_active(0);
+        return;
+    }
+    if (display_parse_wait_exit_code(text, len, &exit_code)) {
+        display_timeline_finish_active(exit_code == 0);
+        return;
+    }
+    if (display_line_starts_with(text, len, "sh: exit")) {
+        display_timeline_finish_active(1);
+    }
+}
+
 static void display_append_text(char *dst, uint32_t *len, uint32_t cap, const char *text) {
     while (*text != '\0' && *len + 1U < cap) {
         dst[*len] = *text;
@@ -754,6 +971,16 @@ static void display_framebuffer_draw_footer_hud(void) {
     uint32_t footer_top = g_display_fb.info.height - (DISPLAY_FB_FOOTER_ROWS * DISPLAY_FB_CHAR_H);
     uint32_t footer_bg = display_framebuffer_pack_rgb(11U, 18U, 32U);
     uint32_t footer_fg = display_framebuffer_pack_rgb(215U, 226U, 242U);
+    uint32_t rail_bg = display_framebuffer_pack_rgb(6U, 12U, 24U);
+    uint32_t rail_border = display_framebuffer_pack_rgb(58U, 82U, 112U);
+    uint32_t rail_left = 20U * DISPLAY_FB_CHAR_W;
+    uint32_t rail_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
+    uint32_t rail_top = footer_top + 3U;
+    uint32_t rail_h = DISPLAY_FB_CHAR_H - 6U;
+    uint32_t cap_w;
+    uint32_t visible_finished;
+    uint32_t slots_taken;
+    uint32_t active_slots = g_display_fb.command_active != 0U ? 1U : 0U;
 
     display_framebuffer_fill_rect_packed(
         0U,
@@ -764,9 +991,86 @@ static void display_framebuffer_draw_footer_hud(void) {
     display_framebuffer_draw_text_packed(
         DISPLAY_FB_CHAR_W,
         footer_top + 1U,
-        "GUI HUD  INPUT:/DEV/CONSOLE  PARSER:WS  MODE:FG  PIPE+REDIR:ON",
+        "GUI HUD  TIMELINE",
         footer_fg,
         footer_bg);
+
+    if (rail_right <= rail_left + (DISPLAY_FB_TIMELINE_CAP * 3U)) {
+        return;
+    }
+
+    display_framebuffer_fill_rect_packed(
+        rail_left,
+        rail_top,
+        rail_right - rail_left,
+        rail_h,
+        rail_border);
+    display_framebuffer_fill_rect_packed(
+        rail_left + 1U,
+        rail_top + 1U,
+        (rail_right - rail_left) - 2U,
+        rail_h - 2U,
+        rail_bg);
+
+    cap_w = ((rail_right - rail_left) - (DISPLAY_FB_TIMELINE_RAIL_INSET * 2U)) / DISPLAY_FB_TIMELINE_CAP;
+    if (cap_w < 3U) {
+        return;
+    }
+
+    visible_finished = g_display_fb.timeline_count;
+    if (visible_finished > DISPLAY_FB_TIMELINE_CAP - active_slots) {
+        visible_finished = DISPLAY_FB_TIMELINE_CAP - active_slots;
+    }
+    slots_taken = visible_finished + active_slots;
+
+    for (uint32_t i = 0U; i < visible_finished; i++) {
+        uint32_t oldest =
+            (g_display_fb.timeline_head + DISPLAY_FB_TIMELINE_CAP - g_display_fb.timeline_count) %
+            DISPLAY_FB_TIMELINE_CAP;
+        uint32_t logical = g_display_fb.timeline_count - visible_finished + i;
+        uint32_t entry_idx = (oldest + logical) % DISPLAY_FB_TIMELINE_CAP;
+        uint32_t slot = (DISPLAY_FB_TIMELINE_CAP - slots_taken) + i;
+        uint32_t cap_x = rail_left + DISPLAY_FB_TIMELINE_RAIL_INSET + (slot * cap_w);
+        uint32_t cap_height = 3U + (g_display_fb.timeline[entry_idx].duration_ticks / 4U);
+        uint32_t cap_max_h = rail_h - 4U;
+        uint32_t cap_y;
+        uint32_t cap_color;
+
+        if (cap_height > cap_max_h) {
+            cap_height = cap_max_h;
+        }
+        cap_y = (rail_top + rail_h - 2U) - cap_height;
+        if (g_display_fb.timeline[entry_idx].event == DISPLAY_TIMELINE_EVENT_FAIL) {
+            cap_color = display_framebuffer_pack_rgb(228U, 96U, 86U);
+        } else {
+            cap_color = display_framebuffer_pack_rgb(74U, 204U, 148U);
+        }
+        if (cap_w > 2U) {
+            display_framebuffer_fill_rect_packed(
+                cap_x,
+                cap_y,
+                cap_w - 1U,
+                cap_height,
+                cap_color);
+        }
+    }
+
+    if (g_display_fb.command_active != 0U) {
+        uint32_t slot = DISPLAY_FB_TIMELINE_CAP - 1U;
+        uint32_t cap_x = rail_left + DISPLAY_FB_TIMELINE_RAIL_INSET + (slot * cap_w);
+        uint32_t pulse = ((uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL) / 3U) & 1U;
+        uint32_t cap_color = pulse ? display_framebuffer_pack_rgb(82U, 172U, 246U)
+                                   : display_framebuffer_pack_rgb(52U, 128U, 204U);
+
+        if (cap_w > 2U) {
+            display_framebuffer_fill_rect_packed(
+                cap_x,
+                rail_top + 2U,
+                cap_w - 1U,
+                rail_h - 4U,
+                cap_color);
+        }
+    }
 #endif
 }
 
@@ -858,6 +1162,10 @@ static void display_framebuffer_putc(char c) {
         return;
     }
     if (c == '\n') {
+        display_framebuffer_on_line_complete(
+            g_display_fb.line_text,
+            g_display_fb.line_len,
+            g_display_fb.line_style);
         if (g_display_fb.line_style == DISPLAY_LINE_STYLE_PROMPT) {
             g_display_fb.line_style = DISPLAY_LINE_STYLE_COMMAND;
             display_framebuffer_redraw_current_line();
@@ -1002,6 +1310,11 @@ static void display_framebuffer_draw_shell_frame(void) {
 void display_init(void) {
     g_display_mode = DISPLAY_MODE_VGA;
     g_display_fb.ready = 0U;
+    g_display_fb.timeline_count = 0U;
+    g_display_fb.timeline_head = 0U;
+    g_display_fb.command_active = 0U;
+    g_display_fb.command_start_ticks = 0U;
+    g_display_fb.command_tag = '?';
     display_verify_font_coverage();
     vga_clear();
 }
