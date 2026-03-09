@@ -24,6 +24,9 @@ SHELL_SMOKE_TIMEOUT_SECS ?= 35
 RELIABILITY_SCENARIO_TIMEOUT_SECS ?= 55
 SMOKE_MARKER = SKEZOS_SMOKE_READY
 RELIABILITY_JSON_VALIDATOR = ./scripts/validate_reliability_json.sh
+RELIABILITY_JSON_REPORTER = ./scripts/reliability_json_report.sh
+REPLAY_HASH_ALL_SEED1337 ?= 903686660
+REPLAY_HASH_QUICK_SEED1337 ?= 258156515
 PHASE4_REPEAT ?= 3
 USERLAND_BUILD = $(BUILD)/userland
 INITRAMFS_STAGING = $(BUILD)/initramfs_root
@@ -622,6 +625,7 @@ qemu-smoke-reliability: $(ISO)
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-reliability,$(BUILD)/qemu-smoke-reliability.log,$(RELIABILITY_SMOKE_SCRIPT))
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability,$(BUILD)/qemu-smoke-reliability.log)
 	@$(RELIABILITY_JSON_VALIDATOR) base $(BUILD)/qemu-smoke-reliability.log
+	@$(RELIABILITY_JSON_REPORTER) base $(BUILD)/qemu-smoke-reliability.log > $(BUILD)/qemu-smoke-reliability.report
 	@if ! grep -Fq "uptime: " $(BUILD)/qemu-smoke-reliability.log; then \
 		echo "[qemu-smoke-reliability] Missing uptime output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
@@ -871,6 +875,10 @@ qemu-smoke-reliability-replay: $(ISO)
 	fi
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability-replay,$(BUILD)/qemu-smoke-reliability-replay.log)
 	@$(RELIABILITY_JSON_VALIDATOR) replay $(BUILD)/qemu-smoke-reliability-replay.log
+	@$(RELIABILITY_JSON_REPORTER) replay $(BUILD)/qemu-smoke-reliability-replay.log \
+		--expect-replay-hash all_seed1337=$(REPLAY_HASH_ALL_SEED1337) \
+		--expect-replay-hash quick_seed1337=$(REPLAY_HASH_QUICK_SEED1337) \
+		> $(BUILD)/qemu-smoke-reliability-replay.report
 	@if ! grep -Fq '{"type":"meta_ext","replay":"all_seed1337","fuzz_lite":0}' $(BUILD)/qemu-smoke-reliability-replay.log; then \
 		echo "[qemu-smoke-reliability-replay] Missing replay profile all_seed1337 meta_ext"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
@@ -932,6 +940,7 @@ qemu-smoke-reliability-fuzz-lite-matrix: $(ISO)
 	fi
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability-fuzz-lite-matrix,$(BUILD)/qemu-smoke-reliability-fuzz-lite.log)
 	@$(RELIABILITY_JSON_VALIDATOR) fuzz $(BUILD)/qemu-smoke-reliability-fuzz-lite.log
+	@$(RELIABILITY_JSON_REPORTER) fuzz $(BUILD)/qemu-smoke-reliability-fuzz-lite.log > $(BUILD)/qemu-smoke-reliability-fuzz-lite.report
 	@if [ "$$(grep -Fc '"type":"meta_ext","replay":"-","fuzz_lite":1' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 1 ]; then \
 		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing fuzz-lite=1 meta_ext"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
