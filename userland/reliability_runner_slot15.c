@@ -18,6 +18,7 @@ struct rr_ctx {
     uint32_t seq;
     uint32_t events;
     uint32_t failures;
+    uint32_t trace_hash;
 };
 
 struct rr_case {
@@ -186,6 +187,8 @@ static void rr_emit_json_event(struct rr_ctx *ctx,
     rr_i32_to_dec(num, sizeof(num), rc);
     rr_write_str(num);
     rr_write_str("}\n");
+    ctx->trace_hash = (ctx->trace_hash * 16777619U) ^ (uint32_t)rc;
+    ctx->trace_hash = (ctx->trace_hash * 16777619U) ^ (ctx->seq + 1U);
 }
 
 static void rr_emit_json_meta_ext(const struct rr_args *args) {
@@ -198,6 +201,21 @@ static void rr_emit_json_meta_ext(const struct rr_args *args) {
     rr_write_str(args->replay);
     rr_write_str("\",\"fuzz_lite\":");
     rr_u32_to_dec(num, sizeof(num), args->fuzz_lite);
+    rr_write_str(num);
+    rr_write_str("}\n");
+}
+
+static void rr_emit_json_trace_summary(const struct rr_ctx *ctx) {
+    char num[16];
+
+    if (!ctx) {
+        return;
+    }
+    rr_write_str("{\"type\":\"trace_summary\",\"seq\":");
+    rr_u32_to_dec(num, sizeof(num), ctx->seq);
+    rr_write_str(num);
+    rr_write_str(",\"hash\":");
+    rr_u32_to_dec(num, sizeof(num), ctx->trace_hash);
     rr_write_str(num);
     rr_write_str("}\n");
 }
@@ -607,6 +625,7 @@ void _start(int argc, char **argv) {
     ctx.seq = 0U;
     ctx.events = 0U;
     ctx.failures = 0U;
+    ctx.trace_hash = 2166136261U ^ args.seed;
 
     rr_write_str("rr: start\n");
     rr_emit_json_meta(args.seed, args.script);
@@ -626,6 +645,7 @@ void _start(int argc, char **argv) {
     }
 
     rr_emit_json_summary(ctx.events, ctx.failures);
+    rr_emit_json_trace_summary(&ctx);
     if (ctx.failures == 0U) {
         rr_write_str("rr: PASS\n");
         user_exit(0);

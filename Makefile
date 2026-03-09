@@ -887,6 +887,11 @@ qemu-smoke-reliability-replay: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
 		exit 1; \
 	fi
+	@if [ "$$(grep -Fc '"type":"trace_summary"' $(BUILD)/qemu-smoke-reliability-replay.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-reliability-replay] Missing replay trace summaries"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
+		exit 1; \
+	fi
 	@if ! grep -Fq "sh: exit" $(BUILD)/qemu-smoke-reliability-replay.log; then \
 		echo "[qemu-smoke-reliability-replay] Missing shell exit line"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability-replay.log; \
@@ -939,6 +944,11 @@ qemu-smoke-reliability-fuzz-lite-matrix: $(ISO)
 	fi
 	@if [ "$$(grep -Fc '{"type":"summary","total":3,"failures":0,"ok":true}' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 3 ]; then \
 		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing one or more fuzz-lite summaries"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc '"type":"trace_summary"' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 3 ]; then \
+		echo "[qemu-smoke-reliability-fuzz-lite-matrix] Missing one or more fuzz-lite trace summaries"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability-fuzz-lite.log; \
 		exit 1; \
 	fi
