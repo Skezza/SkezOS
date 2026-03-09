@@ -13,6 +13,10 @@ static const char kCheckDupBadFd[] = "diag: dup invalid fd";
 static const char kCheckDup2BadTarget[] = "diag: dup2 invalid target fd";
 static const char kCheckPipeEof[] = "diag: pipe eof after writer close";
 static const char kCheckPipeBroken[] = "diag: pipe broken write";
+static const char kCheckReadBadFd[] = "diag: read invalid fd";
+static const char kCheckCloseBadFd[] = "diag: close invalid fd";
+static const char kCheckOpenMissing[] = "diag: open missing path";
+static const char kCheckFdReadCloseFlow[] = "diag: fd open/read/close flow";
 static const char kCheckTimeInfoBadPtr[] = "diag: time_info bad ptr";
 static const char kCheckTimeInfoOk[] = "diag: time_info valid";
 static const char kCheckWaitpidOptionsNotsup[] = "diag: waitpid options notsup";
@@ -175,6 +179,30 @@ static int32_t diag_cwd_root_roundtrip(void) {
     return 0;
 }
 
+static int32_t diag_fd_open_read_close_flow(void) {
+    char buf[4];
+    int32_t fd = user_open("/bin/readme.txt", 15U, SYSCALL_OPEN_FLAG_READ);
+    int32_t rc;
+
+    if (fd < 0) {
+        return fd;
+    }
+    rc = user_read((uint32_t)fd, buf, sizeof(buf));
+    if (rc <= 0) {
+        (void)user_close((uint32_t)fd);
+        return rc < 0 ? rc : -22;
+    }
+    rc = user_close((uint32_t)fd);
+    if (rc < 0) {
+        return rc;
+    }
+    rc = user_close((uint32_t)fd);
+    if (rc != -2) {
+        return rc < 0 ? rc : -22;
+    }
+    return 0;
+}
+
 void _start(int argc, char **argv) {
     int ok = 1;
 
@@ -214,6 +242,26 @@ void _start(int argc, char **argv) {
     if (!diag_expect(kCheckDup2BadTarget,
                      user_dup2(USER_FD_STDOUT, 99U),
                      -22)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckReadBadFd,
+                     user_read(99U, (void *)(uintptr_t)1U, 1U),
+                     -22)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckCloseBadFd,
+                     user_close(99U),
+                     -22)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckOpenMissing,
+                     user_open("/bin/nope.txt", 13U, SYSCALL_OPEN_FLAG_READ),
+                     -2)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckFdReadCloseFlow,
+                     diag_fd_open_read_close_flow(),
+                     0)) {
         ok = 0;
     }
     if (!diag_expect(kCheckPipeEof,
