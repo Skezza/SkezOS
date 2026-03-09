@@ -171,7 +171,7 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
 #define DISPLAY_FRAMEBUFFER_PAGE_FLAGS \
     (PAGING_PAGE_FLAG_WRITABLE | PAGING_PAGE_FLAG_WRITE_THROUGH | PAGING_PAGE_FLAG_CACHE_DISABLE)
 #define DISPLAY_FB_CHAR_W 14U
-#define DISPLAY_FB_CHAR_H 18U
+#define DISPLAY_FB_CHAR_H 17U
 #define DISPLAY_FB_FONT_SRC_W 3U
 #define DISPLAY_FB_FONT_SRC_H 5U
 #define DISPLAY_FB_GLYPH_W 4U
@@ -179,7 +179,7 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
 #define DISPLAY_FB_GLYPH_SCALE_X 2U
 #define DISPLAY_FB_GLYPH_SCALE_Y 2U
 #define DISPLAY_FB_GLYPH_X_PAD 3U
-#define DISPLAY_FB_GLYPH_Y_PAD 1U
+#define DISPLAY_FB_GLYPH_Y_PAD 0U
 #define DISPLAY_FB_HEADER_ROWS 1U
 #define DISPLAY_FB_FOOTER_ROWS 1U
 #define DISPLAY_FB_PANEL_MARGIN_X 16U
@@ -248,44 +248,44 @@ static void display_framebuffer_line_colors(display_line_style_t style,
                                             uint32_t *fg_pixel,
                                             uint32_t *bg_pixel) {
     if (style == DISPLAY_LINE_STYLE_PROMPT) {
-        *fg_pixel = display_framebuffer_pack_rgb(234U, 242U, 252U);
-        *bg_pixel = display_framebuffer_pack_rgb(4U, 11U, 24U);
+        *fg_pixel = display_framebuffer_pack_rgb(244U, 248U, 255U);
+        *bg_pixel = display_framebuffer_pack_rgb(6U, 14U, 30U);
         return;
     }
     if (style == DISPLAY_LINE_STYLE_COMMAND) {
-        *fg_pixel = display_framebuffer_pack_rgb(124U, 168U, 198U);
+        *fg_pixel = display_framebuffer_pack_rgb(146U, 192U, 220U);
         *bg_pixel = display_framebuffer_pack_rgb(0U, 0U, 0U);
         return;
     }
     if (style == DISPLAY_LINE_STYLE_USER) {
-        *fg_pixel = display_framebuffer_pack_rgb(160U, 224U, 255U);
+        *fg_pixel = display_framebuffer_pack_rgb(182U, 232U, 255U);
         *bg_pixel = display_framebuffer_pack_rgb(0U, 0U, 0U);
         return;
     }
     if (style == DISPLAY_LINE_STYLE_TASK) {
-        *fg_pixel = display_framebuffer_pack_rgb(255U, 208U, 138U);
+        *fg_pixel = display_framebuffer_pack_rgb(255U, 220U, 160U);
         *bg_pixel = display_framebuffer_pack_rgb(0U, 0U, 0U);
         return;
     }
 
-    *fg_pixel = display_framebuffer_pack_rgb(242U, 242U, 242U);
+    *fg_pixel = display_framebuffer_pack_rgb(248U, 250U, 252U);
     *bg_pixel = display_framebuffer_pack_rgb(0U, 0U, 0U);
 }
 
 static uint32_t display_framebuffer_line_marker_color(display_line_style_t style) {
     if (style == DISPLAY_LINE_STYLE_PROMPT) {
-        return display_framebuffer_pack_rgb(72U, 160U, 224U);
+        return display_framebuffer_pack_rgb(86U, 178U, 244U);
     }
     if (style == DISPLAY_LINE_STYLE_COMMAND) {
-        return display_framebuffer_pack_rgb(48U, 94U, 132U);
+        return display_framebuffer_pack_rgb(68U, 122U, 166U);
     }
     if (style == DISPLAY_LINE_STYLE_USER) {
-        return display_framebuffer_pack_rgb(88U, 196U, 250U);
+        return display_framebuffer_pack_rgb(102U, 212U, 255U);
     }
     if (style == DISPLAY_LINE_STYLE_TASK) {
-        return display_framebuffer_pack_rgb(245U, 176U, 74U);
+        return display_framebuffer_pack_rgb(248U, 188U, 96U);
     }
-    return display_framebuffer_pack_rgb(52U, 64U, 82U);
+    return display_framebuffer_pack_rgb(62U, 76U, 96U);
 }
 
 static display_line_style_t display_framebuffer_classify_line(const char *text,
@@ -316,7 +316,7 @@ static void display_framebuffer_draw_line_gutter(uint32_t row,
                                                  display_line_style_t style) {
     uint32_t gutter_left = g_display_fb.content_left_px - DISPLAY_FB_LINE_GUTTER_TOTAL;
     uint32_t cell_y = g_display_fb.content_top_px + (row * DISPLAY_FB_CHAR_H);
-    uint32_t track_bg = display_framebuffer_pack_rgb(8U, 14U, 24U);
+    uint32_t track_bg = display_framebuffer_pack_rgb(10U, 17U, 29U);
     uint32_t marker = display_framebuffer_line_marker_color(style);
 
     display_framebuffer_fill_rect_packed(
@@ -355,10 +355,10 @@ static void display_framebuffer_clear_scroll_row(uint32_t row) {
 
 static void display_framebuffer_draw_prompt_strip_idle(void) {
     uint32_t prompt_top = g_display_fb.content_top_px + (g_display_fb.scroll_rows * DISPLAY_FB_CHAR_H);
-    uint32_t prompt_fg = display_framebuffer_pack_rgb(242U, 236U, 204U);
-    uint32_t prompt_bg = display_framebuffer_pack_rgb(11U, 18U, 36U);
-    uint32_t prompt_well_bg = display_framebuffer_pack_rgb(4U, 11U, 24U);
-    uint32_t prompt_accent = display_framebuffer_pack_rgb(72U, 160U, 224U);
+    uint32_t prompt_fg = display_framebuffer_pack_rgb(248U, 242U, 214U);
+    uint32_t prompt_bg = display_framebuffer_pack_rgb(12U, 22U, 42U);
+    uint32_t prompt_well_bg = display_framebuffer_pack_rgb(6U, 14U, 30U);
+    uint32_t prompt_accent = display_framebuffer_pack_rgb(86U, 178U, 244U);
     uint32_t prompt_text_left =
         g_display_fb.content_left_px + (DISPLAY_FB_PROMPT_TEXT_OFFSET_COLS * DISPLAY_FB_CHAR_W);
     uint32_t prompt_text_width = display_framebuffer_prompt_visible_cols() * DISPLAY_FB_CHAR_W;
@@ -397,7 +397,6 @@ static void display_framebuffer_draw_prompt_strip_idle(void) {
         "INPUT",
         prompt_fg,
         prompt_bg);
-    display_framebuffer_draw_footer_hud();
 }
 
 static void display_framebuffer_redraw_current_line(void) {
@@ -436,7 +435,6 @@ static void display_framebuffer_redraw_current_line(void) {
         }
         display_framebuffer_draw_prompt_strip_idle();
     } else {
-        display_framebuffer_draw_prompt_strip_idle();
         if (render_len > g_display_fb.text_cols) {
             render_len = g_display_fb.text_cols;
         }
@@ -524,7 +522,7 @@ static uint32_t display_hash_u32(uint32_t hash, uint32_t value) {
 static uint32_t display_compute_gui_state_hash(void) {
     uint32_t hash = 2166136261U;
 
-    hash = display_hash_u32(hash, 0x46425331U); /* "FBS1" */
+    hash = display_hash_u32(hash, 0x46425332U); /* "FBS2" */
     hash = display_hash_u32(hash, g_display_fb.info.width);
     hash = display_hash_u32(hash, g_display_fb.info.height);
     hash = display_hash_u32(hash, g_display_fb.info.pitch);
@@ -548,12 +546,23 @@ static uint32_t display_compute_gui_state_hash(void) {
     hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_CAP);
     hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_RAIL_INSET);
 
-    /* Include timeline HUD palette IDs to version visual style changes. */
-    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(11U, 18U, 32U));
-    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(215U, 226U, 242U));
+    /* Include style palette IDs so visual tune-ups are regression-gated. */
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(13U, 24U, 42U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(224U, 233U, 246U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(8U, 15U, 29U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(74U, 102U, 136U));
     hash = display_hash_u32(hash, display_framebuffer_pack_rgb(74U, 204U, 148U));
     hash = display_hash_u32(hash, display_framebuffer_pack_rgb(228U, 96U, 86U));
-    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(52U, 128U, 204U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(64U, 146U, 220U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(86U, 178U, 244U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(68U, 122U, 166U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(102U, 212U, 255U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(248U, 188U, 96U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(62U, 76U, 96U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(7U, 11U, 19U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(18U, 40U, 86U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(248U, 182U, 86U));
+    hash = display_hash_u32(hash, display_framebuffer_pack_rgb(44U, 60U, 84U));
 
     return hash;
 }
@@ -724,6 +733,7 @@ static void display_framebuffer_on_line_complete(const char *text,
                                                  display_line_style_t style) {
     int32_t exit_code = 0;
     char tag = '?';
+    int footer_dirty = 0;
 
     if (len == 0U || text == 0) {
         return;
@@ -731,24 +741,25 @@ static void display_framebuffer_on_line_complete(const char *text,
     if (style == DISPLAY_LINE_STYLE_PROMPT) {
         if (display_parse_prompt_command(text, len, &tag)) {
             display_timeline_start_command(tag);
+            footer_dirty = 1;
         }
-        return;
+    } else if (g_display_fb.command_active != 0U) {
+        if (display_line_contains(text, len, "run: launch failed") ||
+            display_line_contains(text, len, "run: redirect open failed") ||
+            display_line_contains(text, len, "spawn failed")) {
+            display_timeline_finish_active(0);
+            footer_dirty = 1;
+        } else if (display_parse_wait_exit_code(text, len, &exit_code)) {
+            display_timeline_finish_active(exit_code == 0);
+            footer_dirty = 1;
+        } else if (display_line_starts_with(text, len, "sh: exit")) {
+            display_timeline_finish_active(1);
+            footer_dirty = 1;
+        }
     }
-    if (g_display_fb.command_active == 0U) {
-        return;
-    }
-    if (display_line_contains(text, len, "run: launch failed") ||
-        display_line_contains(text, len, "run: redirect open failed") ||
-        display_line_contains(text, len, "spawn failed")) {
-        display_timeline_finish_active(0);
-        return;
-    }
-    if (display_parse_wait_exit_code(text, len, &exit_code)) {
-        display_timeline_finish_active(exit_code == 0);
-        return;
-    }
-    if (display_line_starts_with(text, len, "sh: exit")) {
-        display_timeline_finish_active(1);
+
+    if (footer_dirty != 0 && g_display_fb.ready != 0U) {
+        display_framebuffer_draw_footer_hud();
     }
 }
 
@@ -985,9 +996,9 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
 }
 
 static void display_framebuffer_draw_header_metrics(void) {
-    uint32_t metrics_bg = display_framebuffer_pack_rgb(9U, 18U, 34U);
-    uint32_t metrics_fg = display_framebuffer_pack_rgb(229U, 236U, 246U);
-    uint32_t metrics_shadow = display_framebuffer_pack_rgb(0U, 6U, 16U);
+    uint32_t metrics_bg = display_framebuffer_pack_rgb(11U, 22U, 40U);
+    uint32_t metrics_fg = display_framebuffer_pack_rgb(234U, 240U, 250U);
+    uint32_t metrics_shadow = display_framebuffer_pack_rgb(0U, 8U, 20U);
     uint32_t metrics_y = 2U;
     uint32_t metrics_left = 20U * DISPLAY_FB_CHAR_W;
     uint32_t metrics_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
@@ -1016,10 +1027,10 @@ static void display_framebuffer_draw_header_metrics(void) {
 static void display_framebuffer_draw_footer_hud(void) {
 #if DISPLAY_FB_FOOTER_ROWS > 0
     uint32_t footer_top = g_display_fb.info.height - (DISPLAY_FB_FOOTER_ROWS * DISPLAY_FB_CHAR_H);
-    uint32_t footer_bg = display_framebuffer_pack_rgb(11U, 18U, 32U);
-    uint32_t footer_fg = display_framebuffer_pack_rgb(215U, 226U, 242U);
-    uint32_t rail_bg = display_framebuffer_pack_rgb(6U, 12U, 24U);
-    uint32_t rail_border = display_framebuffer_pack_rgb(58U, 82U, 112U);
+    uint32_t footer_bg = display_framebuffer_pack_rgb(13U, 24U, 42U);
+    uint32_t footer_fg = display_framebuffer_pack_rgb(224U, 233U, 246U);
+    uint32_t rail_bg = display_framebuffer_pack_rgb(8U, 15U, 29U);
+    uint32_t rail_border = display_framebuffer_pack_rgb(74U, 102U, 136U);
     uint32_t rail_left = 20U * DISPLAY_FB_CHAR_W;
     uint32_t rail_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
     uint32_t rail_top = footer_top + 3U;
@@ -1105,9 +1116,7 @@ static void display_framebuffer_draw_footer_hud(void) {
     if (g_display_fb.command_active != 0U) {
         uint32_t slot = DISPLAY_FB_TIMELINE_CAP - 1U;
         uint32_t cap_x = rail_left + DISPLAY_FB_TIMELINE_RAIL_INSET + (slot * cap_w);
-        uint32_t pulse = ((uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL) / 3U) & 1U;
-        uint32_t cap_color = pulse ? display_framebuffer_pack_rgb(82U, 172U, 246U)
-                                   : display_framebuffer_pack_rgb(52U, 128U, 204U);
+        uint32_t cap_color = display_framebuffer_pack_rgb(64U, 146U, 220U);
 
         if (cap_w > 2U) {
             display_framebuffer_fill_rect_packed(
@@ -1209,11 +1218,13 @@ static void display_framebuffer_putc(char c) {
         return;
     }
     if (c == '\n') {
+        display_line_style_t completed_style = g_display_fb.line_style;
+
         display_framebuffer_on_line_complete(
             g_display_fb.line_text,
             g_display_fb.line_len,
-            g_display_fb.line_style);
-        if (g_display_fb.line_style == DISPLAY_LINE_STYLE_PROMPT) {
+            completed_style);
+        if (completed_style == DISPLAY_LINE_STYLE_PROMPT) {
             g_display_fb.line_style = DISPLAY_LINE_STYLE_COMMAND;
             display_framebuffer_redraw_current_line();
         }
@@ -1221,7 +1232,9 @@ static void display_framebuffer_putc(char c) {
         g_display_fb.cursor_col = 0U;
         display_framebuffer_scroll_if_needed();
         display_framebuffer_reset_line_tracking(DISPLAY_LINE_STYLE_NORMAL);
-        display_framebuffer_draw_prompt_strip_idle();
+        if (completed_style == DISPLAY_LINE_STYLE_PROMPT) {
+            display_framebuffer_draw_prompt_strip_idle();
+        }
         return;
     }
     if ((uint8_t)c < 0x20U) {
@@ -1287,17 +1300,17 @@ static void display_framebuffer_putc(char c) {
 }
 
 static void display_framebuffer_draw_shell_frame(void) {
-    uint32_t back_bg = display_framebuffer_pack_rgb(5U, 8U, 14U);
-    uint32_t title_bg = display_framebuffer_pack_rgb(14U, 32U, 74U);
-    uint32_t title_fg = display_framebuffer_pack_rgb(252U, 252U, 252U);
-    uint32_t title_shadow = display_framebuffer_pack_rgb(3U, 13U, 32U);
-    uint32_t accent = display_framebuffer_pack_rgb(245U, 170U, 72U);
-    uint32_t badge_fg = display_framebuffer_pack_rgb(8U, 16U, 30U);
+    uint32_t back_bg = display_framebuffer_pack_rgb(7U, 11U, 19U);
+    uint32_t title_bg = display_framebuffer_pack_rgb(18U, 40U, 86U);
+    uint32_t title_fg = display_framebuffer_pack_rgb(252U, 254U, 255U);
+    uint32_t title_shadow = display_framebuffer_pack_rgb(4U, 16U, 38U);
+    uint32_t accent = display_framebuffer_pack_rgb(248U, 182U, 86U);
+    uint32_t badge_fg = display_framebuffer_pack_rgb(10U, 20U, 36U);
     uint32_t badge_x = 8U * DISPLAY_FB_CHAR_W;
     uint32_t badge_y = 2U;
     uint32_t badge_w = (7U * DISPLAY_FB_CHAR_W) - 4U;
     uint32_t badge_h = DISPLAY_FB_CHAR_H - 4U;
-    uint32_t panel_border = display_framebuffer_pack_rgb(32U, 46U, 68U);
+    uint32_t panel_border = display_framebuffer_pack_rgb(44U, 60U, 84U);
     uint32_t panel_bg = display_framebuffer_pack_rgb(0U, 0U, 0U);
     uint32_t panel_left =
         g_display_fb.content_left_px - DISPLAY_FB_PANEL_BORDER - DISPLAY_FB_LINE_GUTTER_TOTAL;
@@ -1317,7 +1330,7 @@ static void display_framebuffer_draw_shell_frame(void) {
         g_display_fb.content_top_px,
         DISPLAY_FB_LINE_GUTTER_TOTAL,
         g_display_fb.content_bottom_px - g_display_fb.content_top_px,
-        display_framebuffer_pack_rgb(8U, 14U, 24U));
+        display_framebuffer_pack_rgb(10U, 17U, 29U));
     display_framebuffer_fill_rect_packed(
         g_display_fb.content_left_px,
         g_display_fb.content_top_px,
@@ -1329,7 +1342,7 @@ static void display_framebuffer_draw_shell_frame(void) {
         g_display_fb.content_top_px,
         DISPLAY_FB_LINE_GUTTER_WIDTH,
         g_display_fb.content_bottom_px - g_display_fb.content_top_px,
-        display_framebuffer_pack_rgb(52U, 64U, 82U));
+        display_framebuffer_pack_rgb(68U, 84U, 106U));
     display_framebuffer_draw_prompt_strip_idle();
     display_framebuffer_draw_text_emphasized_packed(
         DISPLAY_FB_CHAR_W,
@@ -1487,7 +1500,7 @@ void display_late_init(void) {
           info.height,
           info.pitch,
           (uint32_t)info.bpp);
-    KLOGI("display: gui_state_hash=%x profile=fb-shell-v1", gui_hash);
+    KLOGI("display: gui_state_hash=%x profile=fb-shell-v2", gui_hash);
 }
 
 uint32_t display_console_enter_critical(void) {

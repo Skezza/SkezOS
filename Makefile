@@ -22,12 +22,15 @@ LIFECYCLE_SMOKE_LOG = $(BUILD)/qemu-smoke-lifecycle.log
 SMOKE_TIMEOUT_SECS ?= 18
 SHELL_SMOKE_TIMEOUT_SECS ?= 35
 RELIABILITY_SCENARIO_TIMEOUT_SECS ?= 70
+RELIABILITY_SMOKE_STEP_SECS ?= 0.20
+RELIABILITY_SMOKE_RUNNER_SETTLE_SECS ?= 1.50
+RELIABILITY_SMOKE_DIAG_SETTLE_SECS ?= 1.00
 SMOKE_MARKER = SKEZOS_SMOKE_READY
 RELIABILITY_JSON_VALIDATOR = ./scripts/validate_reliability_json.sh
 RELIABILITY_JSON_REPORTER = ./scripts/reliability_json_report.sh
-REPLAY_HASH_ALL_SEED1337 ?= 903686660
-REPLAY_HASH_QUICK_SEED1337 ?= 258156515
-GUI_STATE_HASH_FB_SHELL_V1 ?= 0xD37ACA77
+REPLAY_HASH_ALL_SEED1337 ?= 2002305826
+REPLAY_HASH_QUICK_SEED1337 ?= 2923080070
+GUI_STATE_HASH_FB_SHELL_V2 ?= 0x87FE4975
 PHASE4_REPEAT ?= 3
 USERLAND_BUILD = $(BUILD)/userland
 INITRAMFS_STAGING = $(BUILD)/initramfs_root
@@ -475,37 +478,37 @@ endef
 
 define RELIABILITY_SMOKE_SCRIPT
 printf 'cd /\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo hello > test.txt\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'cat /test.txt\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'cd /bin\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'uptime\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'sleep 2\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo pipeline smoke | cat\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'cat < readme.txt | cat | cat\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo drop-me > /dev/null\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo reliability-v1 > /reliability.txt\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo reliability-v2 >> /reliability.txt\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'cat /reliability.txt\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo should-fail > /bin/readme.txt\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'pwd | cat\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'reliability_runner --seed=1337 --script=all\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_RUNNER_SETTLE_SECS); \
 printf 'diag\n'; \
-sleep 0.25; \
+sleep $(RELIABILITY_SMOKE_DIAG_SETTLE_SECS); \
 printf 'exit\n';
 endef
 
@@ -547,7 +550,7 @@ qemu-smoke-shell-core: $(ISO)
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log,$(SHELL_CORE_SMOKE_SCRIPT))
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log)
 	@if grep -Fq "display: framebuffer console active" $(BUILD)/qemu-smoke-shell-core.log; then \
-		if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V1) profile=fb-shell-v1" $(BUILD)/qemu-smoke-shell-core.log; then \
+		if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V2) profile=fb-shell-v2" $(BUILD)/qemu-smoke-shell-core.log; then \
 			echo "[qemu-smoke-shell-core] Missing or changed framebuffer GUI state hash"; \
 			tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 			exit 1; \

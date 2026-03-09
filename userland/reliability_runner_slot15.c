@@ -9,6 +9,7 @@
 struct rr_args {
     uint32_t seed;
     uint32_t fuzz_lite;
+    uint32_t event_cap;
     char script[16];
     char replay[24];
 };
@@ -19,6 +20,8 @@ struct rr_ctx {
     uint32_t events;
     uint32_t failures;
     uint32_t trace_hash;
+    uint32_t event_cap;
+    uint32_t events_emitted;
 };
 
 struct rr_case {
@@ -176,6 +179,11 @@ static void rr_emit_json_event(struct rr_ctx *ctx,
         return;
     }
     ctx->seq++;
+    ctx->trace_hash = (ctx->trace_hash * 16777619U) ^ (uint32_t)rc;
+    ctx->trace_hash = (ctx->trace_hash * 16777619U) ^ (ctx->seq + 1U);
+    if (ctx->event_cap == 0U || ctx->events_emitted >= ctx->event_cap) {
+        return;
+    }
     rr_write_str("{\"type\":\"event\",\"seq\":");
     rr_u32_to_dec(num, sizeof(num), ctx->seq);
     rr_write_str(num);
@@ -187,8 +195,7 @@ static void rr_emit_json_event(struct rr_ctx *ctx,
     rr_i32_to_dec(num, sizeof(num), rc);
     rr_write_str(num);
     rr_write_str("}\n");
-    ctx->trace_hash = (ctx->trace_hash * 16777619U) ^ (uint32_t)rc;
-    ctx->trace_hash = (ctx->trace_hash * 16777619U) ^ (ctx->seq + 1U);
+    ctx->events_emitted++;
 }
 
 static void rr_emit_json_meta_ext(const struct rr_args *args) {
@@ -535,6 +542,7 @@ static void rr_parse_args(int argc, char **argv, struct rr_args *out) {
     }
     out->seed = 1U;
     out->fuzz_lite = 0U;
+    out->event_cap = 1U;
     out->script[0] = 'a';
     out->script[1] = 'l';
     out->script[2] = 'l';
@@ -572,6 +580,10 @@ static void rr_parse_args(int argc, char **argv, struct rr_args *out) {
         }
         if (rr_starts_with(argv[i], "--fuzz-lite=")) {
             out->fuzz_lite = rr_parse_u32(argv[i] + 12);
+            continue;
+        }
+        if (rr_starts_with(argv[i], "--event-cap=")) {
+            out->event_cap = rr_parse_u32(argv[i] + 12);
             continue;
         }
     }
@@ -626,6 +638,8 @@ void _start(int argc, char **argv) {
     ctx.events = 0U;
     ctx.failures = 0U;
     ctx.trace_hash = 2166136261U ^ args.seed;
+    ctx.event_cap = args.event_cap;
+    ctx.events_emitted = 0U;
 
     rr_write_str("rr: start\n");
     rr_emit_json_meta(args.seed, args.script);

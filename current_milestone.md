@@ -60,7 +60,8 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - 2026-03-09 - Landed first Phase 11 slice: framebuffer shell now reserves a footer row and renders a compact operator HUD line while preserving shell/runtime behavior.
 - 2026-03-09 - Landed next Phase 11 slice: bootstrap framebuffer font table now covers all printable ASCII glyphs, and boot logs now emit explicit coverage verification (`95/95` expected).
 - 2026-03-09 - Landed creative GUI slice: footer HUD now includes a command timeline rail keyed off prompt/launch/wait/failure output transitions, with running and pass/fail capsule colors.
-- 2026-03-09 - Landed deterministic GUI gate slice: framebuffer path now emits `display: gui_state_hash=... profile=fb-shell-v1`, and `qemu-smoke-shell-core` asserts the expected hash when framebuffer mode is active.
+- 2026-03-09 - Landed deterministic GUI gate slice: framebuffer path now emits `display: gui_state_hash=... profile=fb-shell-v2`, and `qemu-smoke-shell-core` asserts the expected hash when framebuffer mode is active.
+- 2026-03-09 - Landed line-density/readability pass: framebuffer glyph baseline and chrome contrast were tuned, hot-path HUD redraws were tightened, and reliability smoke sequencing was made deterministic under unchanged smoke timeout values.
 - 2026-03-09 - Added deterministic visual-regression strategy note: `docs/gui_visual_regression_strategy.md`.
 - 2026-03-09 - Validation for this transition slice:
   - `make check`
