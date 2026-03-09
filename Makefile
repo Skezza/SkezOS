@@ -50,7 +50,8 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/fault_slot11.o \
 	$(USERLAND_BUILD)/pwd_slot12.o \
 	$(USERLAND_BUILD)/ls_slot13.o \
-	$(USERLAND_BUILD)/busybox_slot14.o
+	$(USERLAND_BUILD)/busybox_slot14.o \
+	$(USERLAND_BUILD)/reliability_runner_slot15.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -67,7 +68,8 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/fault.elf \
 	$(USERLAND_BUILD)/pwd.elf \
 	$(USERLAND_BUILD)/ls.elf \
-	$(USERLAND_BUILD)/busybox.elf
+	$(USERLAND_BUILD)/busybox.elf \
+	$(USERLAND_BUILD)/reliability_runner.elf
 
 .PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability check check-pr check-release check-nightly
 
@@ -142,6 +144,9 @@ $(USERLAND_BUILD)/ls.elf: $(USERLAND_BUILD)/ls_slot13.o
 $(USERLAND_BUILD)/busybox.elf: $(USERLAND_BUILD)/busybox_slot14.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01500000 -o $@ $<
 
+$(USERLAND_BUILD)/reliability_runner.elf: $(USERLAND_BUILD)/reliability_runner_slot15.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01511000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -160,6 +165,7 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/pwd.elf $(INITRAMFS_STAGING)/bin/pwd.elf
 	cp $(USERLAND_BUILD)/ls.elf $(INITRAMFS_STAGING)/bin/ls.elf
 	cp $(USERLAND_BUILD)/busybox.elf $(INITRAMFS_STAGING)/bin/busybox.elf
+	cp $(USERLAND_BUILD)/reliability_runner.elf $(INITRAMFS_STAGING)/bin/reliability_runner.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -490,6 +496,8 @@ printf 'echo should-fail > /bin/readme.txt\n'; \
 sleep 0.25; \
 printf 'pwd | cat\n'; \
 sleep 0.25; \
+printf 'reliability_runner --seed=1337 --script=all\n'; \
+sleep 0.25; \
 printf 'diag\n'; \
 sleep 0.25; \
 printf 'exit\n';
@@ -653,6 +661,31 @@ qemu-smoke-reliability: $(ISO)
 	fi
 	@if ! grep -Fq "run: builtin does not support pipes/redirection" $(BUILD)/qemu-smoke-reliability.log; then \
 		echo "[qemu-smoke-reliability] Missing builtin pipeline rejection output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"meta","seed":1337,"script":"all"}' $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing reliability_runner meta JSON"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"case","name":"proc_redirect_reap","ok":true,"rc":0}' $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing reliability_runner proc_redirect_reap JSON"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"case","name":"cwd_path_drift","ok":true,"rc":0}' $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing reliability_runner cwd_path_drift JSON"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"case","name":"pipe_close_order_parent_child","ok":true,"rc":0}' $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing reliability_runner pipe_close_order_parent_child JSON"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq '{"type":"summary","total":3,"failures":0,"ok":true}' $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing reliability_runner summary JSON"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
