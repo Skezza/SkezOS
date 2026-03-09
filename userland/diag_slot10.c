@@ -30,6 +30,11 @@ static const char kCheckGetcwdBadPtr[] = "diag: getcwd bad ptr";
 static const char kCheckGetcwdZeroLen[] = "diag: getcwd zero len";
 static const char kCheckChdirNotDir[] = "diag: chdir file notsup";
 static const char kCheckCwdRootRoundtrip[] = "diag: cwd root roundtrip";
+static const char kCheckSpawnMissing[] = "diag: spawn missing path";
+static const char kCheckSpawnExBadFlags[] = "diag: spawn_ex bad flags";
+static const char kCheckSpawnWaitHello[] = "diag: spawn/wait hello";
+static const char kCheckWaitReapAgain[] = "diag: waitpid reap again";
+static const char kCheckWaitNonChild[] = "diag: waitpid non-child";
 static const char kOk[] = " ok\n";
 static const char kBad[] = " bad rc=";
 
@@ -203,8 +208,34 @@ static int32_t diag_fd_open_read_close_flow(void) {
     return 0;
 }
 
+static int32_t diag_spawn_wait_hello(int32_t *out_pid) {
+    int32_t status = -1;
+    int32_t pid = user_spawn("/bin/hello.elf", 14U);
+    int32_t waited;
+
+    if (out_pid) {
+        *out_pid = -1;
+    }
+    if (pid <= 0) {
+        return pid < 0 ? pid : -22;
+    }
+    waited = user_waitpid(pid, &status, 0U);
+    if (waited < 0) {
+        return waited;
+    }
+    if (waited != pid || status != 0) {
+        return -22;
+    }
+    if (out_pid) {
+        *out_pid = pid;
+    }
+    return 0;
+}
+
 void _start(int argc, char **argv) {
     int ok = 1;
+    int32_t waited_pid = -1;
+    struct syscall_spawn_ex_req bad_flags_req;
 
     (void)argc;
     (void)argv;
@@ -222,6 +253,36 @@ void _start(int argc, char **argv) {
     if (!diag_expect(kCheckSpawnEx,
                      user_syscall1(SYS_SPAWN_EX, 0U),
                      -14)) {
+        ok = 0;
+    }
+    bad_flags_req.path_ptr = (uint32_t)(uintptr_t)"/bin/hello.elf";
+    bad_flags_req.path_len = 14U;
+    bad_flags_req.cmdline_ptr = 0U;
+    bad_flags_req.cmdline_len = 0U;
+    bad_flags_req.flags = (SYSCALL_SPAWN_FLAG_INHERIT_FDS | (1U << 8));
+    if (!diag_expect(kCheckSpawnExBadFlags,
+                     user_syscall1(SYS_SPAWN_EX, (uint32_t)(uintptr_t)&bad_flags_req),
+                     -22)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckSpawnMissing,
+                     user_spawn("/bin/nope.elf", 13U),
+                     -2)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckSpawnWaitHello,
+                     diag_spawn_wait_hello(&waited_pid),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckWaitReapAgain,
+                     user_waitpid(waited_pid, 0, 0U),
+                     -2)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckWaitNonChild,
+                     user_waitpid(9999, 0, 0U),
+                     -2)) {
         ok = 0;
     }
     if (!diag_expect(kCheckUnknown,

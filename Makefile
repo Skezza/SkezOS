@@ -671,6 +671,31 @@ qemu-smoke-reliability: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
+	@if ! grep -Fq "diag: spawn_ex bad flags ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag spawn_ex bad-flags check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: spawn missing path ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag spawn missing-path check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: spawn/wait hello ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag spawn/wait hello check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: waitpid reap again ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag waitpid reap-again check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: waitpid non-child ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag waitpid non-child check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
 	@if ! grep -Fq "diag: read invalid fd ok" $(BUILD)/qemu-smoke-reliability.log; then \
 		echo "[qemu-smoke-reliability] Missing diag read invalid-fd check"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
