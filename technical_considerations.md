@@ -31,8 +31,16 @@ The active follow-on is back on GUI progression:
 - keep reliability work scoped to maintenance and explicit regression gaps, not as the default growth branch
 - latest landed slice: footer HUD is now persistent and the bootstrap framebuffer font now verifies printable ASCII coverage at boot
 - latest landed creative slice: footer HUD now renders a command timeline rail (running/success/failure capsules) from existing shell lifecycle output without syscall or ABI churn
-- latest landed deterministic gate: framebuffer GUI state hash (`fb-shell-v3`) is now emitted by the kernel and asserted in `qemu-smoke-shell-core`
+- latest landed deterministic gate: framebuffer GUI state hash (`fb-shell-v4`, expected `0xD9BFAA54`) is emitted by the kernel and asserted in `qemu-smoke-shell-core`
 - latest landed shell-chrome interaction slice: prompt lane state hints now reflect command lifecycle (`INPUT` -> `RUN <tag>` -> `OK/ERR <tag>`) via existing shell output parsing only
+- latest landed operator HUD slice: footer legend now includes compact state meanings (`I/R/O/E`) plus last transition cause (`PROM`, `WAIT`, `FAIL`, `EXIT`, `ROLL`, `HOLD`) from parse-only shell/log transitions
+- latest landed nightly triage slice: when `check-nightly` fails, CI now attempts a non-gating framebuffer screenshot capture (`build/artifacts/gui-fb-failure-*.ppm`) for GUI debugging
+- latest landed Phase 12 candidate slice: user shell input now supports `Tab` command-name completion, bounded-history preview navigation (`Esc`/`Ctrl+P` older, `Ctrl+N` newer/current), and a bounded `history` builtin view, with compact ambiguity hints and no syscall ABI or parser model churn
+- latest reliability maintenance follow-up: redirected pipeline smoke now uses a two-stage `cat < readme.txt | cat` probe to keep coverage while avoiding deterministic spawn-slot contention in three-stage shells
+- latest Phase 13 candidate hardening slice: framebuffer GUI hash assertions are now enforced across the shell-facing smoke suite (userfault, lifecycle, reliability, replay, fuzz-lite) instead of only `qemu-smoke-shell-core`, still conditional on framebuffer mode
+- latest reliability sequencing hardening: fuzz-lite runner settle time is now `2.25s` by default to avoid command-loss races during console ownership transitions in nightly matrix runs
+- latest artifact-triage hardening follow-up: framebuffer dump capture now emits validated `.meta` sidecars (timestamp, geometry, size, sha256) for deterministic GUI failure triage artifacts
+- latest artifact-triage usability follow-up: capture now updates stable `gui-fb-failure-latest.*` pointers and emits a machine-parseable `GUI_FB_DUMP_META` contract line
 
 Queued after the current GUI slices:
 

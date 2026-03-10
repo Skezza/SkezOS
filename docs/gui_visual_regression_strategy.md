@@ -27,6 +27,24 @@ Add deterministic GUI-regression signals without requiring fragile screenshot co
 - `make check` and `make check-nightly` continue to pass without timeout changes.
 
 ## Current status (2026-03-09)
-- Implemented for profile `fb-shell-v3`:
-  - kernel emits `display: gui_state_hash=... profile=fb-shell-v3`
-  - `qemu-smoke-shell-core` asserts expected hash when framebuffer mode is active
+- Implemented for profile `fb-shell-v4`:
+  - kernel emits `display: gui_state_hash=... profile=fb-shell-v4`
+  - expected hash is `0xD9BFAA54`
+  - shell-facing smokes now assert expected hash when framebuffer mode is active:
+    - `qemu-smoke-userfault`
+    - `qemu-smoke-shell-core`
+    - `qemu-smoke-lifecycle`
+    - `qemu-smoke-reliability`
+    - `qemu-smoke-reliability-replay`
+    - `qemu-smoke-reliability-fuzz-lite-matrix`
+- Implemented nightly failure triage hook:
+  - `check-nightly` now attempts `qemu-smoke-gui-fb-dump` when nightly fails
+  - artifact output is `build/artifacts/gui-fb-failure-*.ppm`
+  - capture now emits sidecar metadata `build/artifacts/gui-fb-failure-*.meta` with timestamp, geometry, size, and `sha256`
+  - capture now updates stable latest pointers:
+    - `build/artifacts/gui-fb-failure-latest.ppm`
+    - `build/artifacts/gui-fb-failure-latest.meta`
+    - `build/artifacts/gui-fb-failure-latest.qemu.log`
+  - capture now emits a parseable summary line:
+    - `GUI_FB_DUMP_META path=... sha256=... width=... height=... size_bytes=...`
+  - capture is explicitly non-gating (nightly still fails/passes based on smoke assertions)

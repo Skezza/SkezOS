@@ -27,15 +27,25 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - [x] Switch active milestone text from reliability to GUI polish (`done`)
 - [x] Add framebuffer footer HUD strip with stable operator-state text (`done`)
 - [x] Add command timeline rail in footer HUD using existing shell lifecycle output patterns (`done`)
+- [x] Add compact footer interaction legend (`I/IN`, `R/RUN`, `O/OK`, `E/ERR`) with last transition cause from existing shell output parsing (`done`)
 - [x] Keep framebuffer content viewport/prompt lane intact while reserving footer space (`done`)
 - [x] Define the immediate next GUI slices (font coverage pass, line-density tweaks, shell chrome interactions) in this document (`done`)
 - [x] Add one deterministic visual regression check strategy note for future CI use (`done`, `docs/gui_visual_regression_strategy.md`)
 - [x] Implement first deterministic GUI gate: framebuffer state hash line asserted in smoke (`done`)
+- [x] Add nightly-only non-gating framebuffer dump artifact capture on failure (`done`)
 
 ## Immediate next GUI slices
 - Slice A (font coverage + fallback): complete printable ASCII glyph coverage in the bootstrap table, keep `?` fallback, and emit one boot-time coverage log line.
 - Slice B (line density/readability): tighten glyph baseline and line marker contrast while preserving current row/column geometry and prompt lane behavior.
 - Slice C (shell chrome interactions): use existing shell state transitions (`R`/`E`/`C`) to drive subtle prompt-lane/footer state hints without new syscalls.
+
+## Phase 12 candidate (input UX, ABI-stable)
+- [x] Start userland command-entry UX hints without parser/ABI growth: `Tab` now completes first-token command names (builtins + `/bin/*.elf`) and shows compact `hint:` candidates on ambiguity (`done`)
+- [x] Add lightweight history preview navigation without ABI churn: `Esc`/`Ctrl+P` browse backward through recent commands, `Ctrl+N` moves forward toward the current buffer (`done`)
+- [x] Expose bounded in-shell command history as a builtin (`history`) and gate it in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+
+## Phase 13 candidate (GUI regression hardening)
+- [x] Promote framebuffer GUI hash assertions from shell-core-only to the shell-facing smoke suite (`qemu-smoke-userfault`, `qemu-smoke-lifecycle`, `qemu-smoke-reliability`, replay, and fuzz-lite), while keeping hash checks conditional on framebuffer mode (`done`)
 
 ## Visual regression strategy
 - Strategy note is tracked in `docs/gui_visual_regression_strategy.md`.
@@ -61,6 +71,17 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - 2026-03-09 - Landed next Phase 11 slice: bootstrap framebuffer font table now covers all printable ASCII glyphs, and boot logs now emit explicit coverage verification (`95/95` expected).
 - 2026-03-09 - Landed creative GUI slice: footer HUD now includes a command timeline rail keyed off prompt/launch/wait/failure output transitions, with running and pass/fail capsule colors.
 - 2026-03-09 - Landed deterministic GUI gate slice: framebuffer path now emits `display: gui_state_hash=... profile=fb-shell-v3`, and `qemu-smoke-shell-core` asserts the expected hash when framebuffer mode is active.
+- 2026-03-09 - Landed compact HUD legend slice: footer now shows state meanings (`I/R/O/E`) plus the last transition cause (`PROM`, `WAIT`, `FAIL`, `EXIT`, `ROLL`, `HOLD`) using existing shell/log parsing only; no ABI/syscall changes.
+- 2026-03-09 - Refreshed deterministic GUI gate profile to `fb-shell-v4` with expected hash `0xD9BFAA54` asserted by `qemu-smoke-shell-core`.
+- 2026-03-09 - Landed nightly triage slice: `check-nightly` now auto-attempts a non-gating framebuffer screenshot artifact capture on failure (`qemu-smoke-gui-fb-dump` -> `build/artifacts/gui-fb-failure-*.ppm`).
+- 2026-03-10 - Started Phase 12 candidate input UX slice: shell `Tab` completion now auto-expands first-token command names from builtins and `/bin/*.elf` entries, emits compact `hint:` match lists when ambiguous, and preserves existing syscall/parser contracts.
+- 2026-03-10 - Landed follow-up input UX slice: shell input now keeps a bounded history ring and supports quick preview navigation (`Esc`/`Ctrl+P` older, `Ctrl+N` newer/current) while keeping command execution semantics and ABI unchanged.
+- 2026-03-10 - Landed next Phase 12 follow-up: shell now exposes the same bounded ring through a `history` builtin and `qemu-smoke-shell-core` now exercises both Tab-completed builtin invocation (`his<Tab>`) and numbered history output.
+- 2026-03-10 - Reliability maintenance follow-up: `qemu-smoke-reliability` redirected pipeline probe was narrowed from three `cat` stages to two (`cat < readme.txt | cat`) to avoid spawn-slot timing contention (`rc=-95`) while preserving redirected-pipeline coverage.
+- 2026-03-10 - Started Phase 13 candidate hardening: added a reusable framebuffer GUI-hash assertion helper and applied it across all shell-facing smoke targets so visual-regression hash drift is caught outside shell-core as well.
+- 2026-03-10 - Reliability sequencing hardening: raised `RELIABILITY_FUZZ_RUNNER_SETTLE_SECS` to `2.25` to keep fuzz-lite command injection aligned with console ownership handoff and avoid intermittent JSON validator failures in nightly runs.
+- 2026-03-10 - Artifact-triage hardening follow-up: framebuffer dump capture now validates PPM headers and writes sidecar `.meta` files (timestamp, geometry, size, sha256, qmp settings) so nightly failure artifacts are deterministic and machine-readable.
+- 2026-03-10 - Artifact-triage usability follow-up: capture now also updates `gui-fb-failure-latest.*` pointers and emits a stable `GUI_FB_DUMP_META ...` summary line for automation-friendly post-failure ingestion.
 - 2026-03-09 - Landed line-density/readability pass: framebuffer glyph baseline and chrome contrast were tuned, hot-path HUD redraws were tightened, and reliability smoke sequencing was made deterministic under unchanged smoke timeout values.
 - 2026-03-09 - Landed shell chrome interaction slice: prompt-lane status now tracks command lifecycle using existing output transitions (`RUN`, `OK`, `ERR` with command tag) and no syscall/ABI changes.
 - 2026-03-09 - Added deterministic visual-regression strategy note: `docs/gui_visual_regression_strategy.md`.

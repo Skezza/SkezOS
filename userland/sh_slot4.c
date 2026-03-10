@@ -10,6 +10,8 @@
 #define SHELL_PROMPT_MAX 128U
 #define SHELL_PIPELINE_MAX 8U
 #define SHELL_STAGE_CMDLINE_MAX 96U
+#define SHELL_COMPLETION_MAX_MATCHES (SHELL_LS_MAX_ENTRIES + 8U)
+#define SHELL_HISTORY_MAX 8U
 
 struct shell_stage {
     char cmd[SHELL_PATH_MAX];
@@ -27,24 +29,27 @@ struct shell_stage {
 };
 
 static char g_shell_line[SHELL_LINE_MAX];
-static char g_shell_history_line[SHELL_LINE_MAX];
 static char g_shell_path[SHELL_PATH_MAX];
 static char g_shell_cwd[SHELL_CWD_MAX] = "/";
 static char g_shell_prompt[SHELL_PROMPT_MAX];
 static struct shell_stage g_shell_stages[SHELL_PIPELINE_MAX];
 static struct syscall_task_snapshot_entry g_shell_ps_tasks[SHELL_PS_MAX_TASKS];
 static struct syscall_dir_entry g_shell_ls_entries[SHELL_LS_MAX_ENTRIES];
+static char g_shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
+static uint32_t g_shell_history_count;
+static uint32_t g_shell_history_head;
 
 static const char kBanner[] = "SkezOS shell ready\nType 'help' for commands.\n";
 static const char kHelp[] =
-    "builtins: help ps ls pwd cd wait exit\n"
+    "builtins: help history ps ls pwd cd wait exit\n"
     "run: <name> -> /bin/<name>.elf, ./tool uses cwd\n"
-    "edit: BS deletes, Esc recalls the last command\n";
+    "edit: BS deletes, Esc/Ctrl+P history, Ctrl+N forward, Tab completes commands\n";
 static const char kCdFail[] = "cd: chdir failed\n";
 static const char kLsFail[] = "ls: list failed\n";
 static const char kPwdFail[] = "pwd: getcwd failed\n";
 static const char kWaitStub[] = "wait: no background jobs\n";
 static const char kPsFail[] = "ps: snapshot failed\n";
+static const char kHistoryEmpty[] = "history: empty\n";
 static const char kSpawnFail[] = "run: launch failed\n";
 static const char kWaitFail[] = "run: waitpid failed\n";
 static const char kParseFail[] = "run: parse failed\n";
@@ -53,6 +58,20 @@ static const char kRedirectOpenFail[] = "run: redirect open failed\n";
 static const char kExit[] = "sh: exit\n";
 static const char kNewline[] = "\n";
 static const char kEraseOne[] = "\b \b";
+static const char kHintPrefix[] = "hint: ";
+static const char *kShellCompletionBuiltins[] = {
+    "help",
+    "history",
+    "wait",
+    "ps",
+    "ls",
+    "pwd",
+    "cd",
+    "exit",
+};
+
+static uint32_t shell_skip_spaces(const char *s, uint32_t idx);
+static int shell_str_contains_char_n(const char *s, uint32_t len, char ch);
 
 static void shell_write_all(const char *buf, uint32_t len) {
     while (len > 0U) {
@@ -278,6 +297,26 @@ static void shell_run_ps(void) {
     }
 }
 
+static void shell_run_history(void) {
+    uint32_t oldest;
+
+    if (g_shell_history_count == 0U) {
+        shell_write_str(kHistoryEmpty);
+        return;
+    }
+
+    oldest = (g_shell_history_head + SHELL_HISTORY_MAX - g_shell_history_count) % SHELL_HISTORY_MAX;
+    for (uint32_t i = 0U; i < g_shell_history_count; i++) {
+        uint32_t idx = (oldest + i) % SHELL_HISTORY_MAX;
+        char num_buf[12];
+
+        shell_format_u32(num_buf, sizeof(num_buf), i + 1U);
+        shell_write_padded(num_buf, 4U);
+        shell_write_str(g_shell_history[idx]);
+        shell_write_str(kNewline);
+    }
+}
+
 static int32_t shell_read_char_blocking(void) {
     char ch;
     int32_t rc = user_read(USER_FD_STDIN, &ch, 1U);
@@ -291,8 +330,256 @@ static int32_t shell_read_char_blocking(void) {
     return -1;
 }
 
+static int shell_history_get(uint32_t offset,
+                             const char **out_line,
+                             uint32_t *out_len) {
+    uint32_t newest;
+    uint32_t idx;
+
+    if (!out_line || !out_len || offset >= g_shell_history_count) {
+        return -1;
+    }
+    newest = (g_shell_history_head + SHELL_HISTORY_MAX - 1U) % SHELL_HISTORY_MAX;
+    idx = (newest + SHELL_HISTORY_MAX - offset) % SHELL_HISTORY_MAX;
+    *out_line = g_shell_history[idx];
+    *out_len = user_strlen(g_shell_history[idx]);
+    return 0;
+}
+
+static void shell_history_push(const char *line, uint32_t len) {
+    uint32_t slot;
+
+    if (!line || len == 0U) {
+        return;
+    }
+    if (len + 1U > SHELL_LINE_MAX) {
+        len = SHELL_LINE_MAX - 1U;
+    }
+    if (g_shell_history_count != 0U) {
+        const char *latest = 0;
+        uint32_t latest_len = 0U;
+        uint32_t i = 0U;
+
+        if (shell_history_get(0U, &latest, &latest_len) == 0 &&
+            latest_len == len) {
+            while (i < len && latest[i] == line[i]) {
+                i++;
+            }
+            if (i == len) {
+                return;
+            }
+        }
+    }
+
+    slot = g_shell_history_head;
+    user_memcpy(g_shell_history[slot], line, len);
+    g_shell_history[slot][len] = '\0';
+    g_shell_history_head = (g_shell_history_head + 1U) % SHELL_HISTORY_MAX;
+    if (g_shell_history_count < SHELL_HISTORY_MAX) {
+        g_shell_history_count++;
+    }
+}
+
+static int shell_prefix_match(const char *candidate,
+                              uint32_t candidate_len,
+                              const char *prefix,
+                              uint32_t prefix_len) {
+    if (!candidate || !prefix || prefix_len > candidate_len) {
+        return 0;
+    }
+    for (uint32_t i = 0U; i < prefix_len; i++) {
+        if (candidate[i] != prefix[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static uint32_t shell_common_prefix_len(const char *lhs,
+                                        uint32_t lhs_len,
+                                        const char *rhs,
+                                        uint32_t rhs_len) {
+    uint32_t limit = lhs_len < rhs_len ? lhs_len : rhs_len;
+    uint32_t i = 0U;
+
+    while (i < limit && lhs[i] == rhs[i]) {
+        i++;
+    }
+    return i;
+}
+
+static int shell_match_list_contains(char matches[][SHELL_PATH_MAX],
+                                     uint32_t match_count,
+                                     const char *candidate,
+                                     uint32_t candidate_len) {
+    for (uint32_t i = 0U; i < match_count; i++) {
+        uint32_t len = user_strlen(matches[i]);
+        uint32_t j = 0U;
+
+        if (len != candidate_len) {
+            continue;
+        }
+        while (j < len && matches[i][j] == candidate[j]) {
+            j++;
+        }
+        if (j == len) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void shell_match_list_add(char matches[][SHELL_PATH_MAX],
+                                 uint32_t match_cap,
+                                 uint32_t *match_count,
+                                 const char *candidate,
+                                 uint32_t candidate_len) {
+    if (!matches || !match_count || !candidate || candidate_len == 0U ||
+        candidate_len + 1U > SHELL_PATH_MAX || *match_count >= match_cap) {
+        return;
+    }
+    if (shell_match_list_contains(matches, *match_count, candidate, candidate_len)) {
+        return;
+    }
+    user_memcpy(matches[*match_count], candidate, candidate_len);
+    matches[*match_count][candidate_len] = '\0';
+    (*match_count)++;
+}
+
+static uint32_t shell_collect_command_matches(const char *prefix,
+                                              uint32_t prefix_len,
+                                              char matches[][SHELL_PATH_MAX],
+                                              uint32_t match_cap) {
+    uint32_t match_count = 0U;
+    int32_t dir_count;
+
+    for (uint32_t i = 0U; i < (uint32_t)(sizeof(kShellCompletionBuiltins) /
+                                          sizeof(kShellCompletionBuiltins[0])); i++) {
+        const char *name = kShellCompletionBuiltins[i];
+        uint32_t name_len = user_strlen(name);
+
+        if (!shell_prefix_match(name, name_len, prefix, prefix_len)) {
+            continue;
+        }
+        shell_match_list_add(matches, match_cap, &match_count, name, name_len);
+    }
+
+    dir_count = user_list_dir("/bin", 4U, g_shell_ls_entries, SHELL_LS_MAX_ENTRIES);
+    if (dir_count <= 0) {
+        return match_count;
+    }
+
+    for (uint32_t i = 0U; i < (uint32_t)dir_count; i++) {
+        uint32_t name_len;
+
+        if (g_shell_ls_entries[i].type != SYSCALL_NODE_TYPE_FILE) {
+            continue;
+        }
+        name_len = user_strlen(g_shell_ls_entries[i].name);
+        if (name_len <= 4U ||
+            !user_str_has_suffix_n(g_shell_ls_entries[i].name, name_len, ".elf")) {
+            continue;
+        }
+        name_len -= 4U;
+        if (!shell_prefix_match(g_shell_ls_entries[i].name, name_len, prefix, prefix_len)) {
+            continue;
+        }
+        shell_match_list_add(matches,
+                             match_cap,
+                             &match_count,
+                             g_shell_ls_entries[i].name,
+                             name_len);
+    }
+
+    return match_count;
+}
+
+static int shell_try_complete_command(char *buf, uint32_t *len, uint32_t cap) {
+    uint32_t cmd_start;
+    uint32_t cmd_len;
+    uint32_t match_count;
+    uint32_t common_len;
+    char matches[SHELL_COMPLETION_MAX_MATCHES][SHELL_PATH_MAX];
+
+    if (!buf || !len || cap == 0U) {
+        return 0;
+    }
+    cmd_start = shell_skip_spaces(buf, 0U);
+    if (cmd_start >= *len) {
+        return 0;
+    }
+    for (uint32_t i = cmd_start; i < *len; i++) {
+        if (user_is_space(buf[i]) || buf[i] == '|' || buf[i] == '<' || buf[i] == '>') {
+            return 0;
+        }
+    }
+    cmd_len = *len - cmd_start;
+    if (cmd_len == 0U || cmd_len + 1U > SHELL_PATH_MAX ||
+        shell_str_contains_char_n(buf + cmd_start, cmd_len, '/')) {
+        return 0;
+    }
+
+    match_count = shell_collect_command_matches(buf + cmd_start,
+                                                cmd_len,
+                                                matches,
+                                                SHELL_COMPLETION_MAX_MATCHES);
+    if (match_count == 0U) {
+        return 0;
+    }
+
+    common_len = user_strlen(matches[0]);
+    for (uint32_t i = 1U; i < match_count; i++) {
+        common_len = shell_common_prefix_len(matches[0], common_len,
+                                             matches[i], user_strlen(matches[i]));
+    }
+
+    if (common_len > cmd_len) {
+        uint32_t append_len = common_len - cmd_len;
+        if (*len + append_len + 1U >= cap) {
+            append_len = (cap - 1U) - *len;
+        }
+        if (append_len != 0U) {
+            user_memcpy(buf + *len, matches[0] + cmd_len, append_len);
+            *len += append_len;
+            buf[*len] = '\0';
+            shell_write_all(matches[0] + cmd_len, append_len);
+        }
+        return 1;
+    }
+
+    if (match_count == 1U && common_len == cmd_len) {
+        if (*len + 1U < cap) {
+            buf[*len] = ' ';
+            (*len)++;
+            buf[*len] = '\0';
+            shell_write_char(' ');
+        }
+        return 1;
+    }
+
+    shell_write_str(kNewline);
+    shell_write_str(kHintPrefix);
+    for (uint32_t i = 0U; i < match_count && i < 6U; i++) {
+        if (i != 0U) {
+            shell_write_char(' ');
+        }
+        shell_write_str(matches[i]);
+    }
+    if (match_count > 6U) {
+        shell_write_str(" ...");
+    }
+    shell_write_str(kNewline);
+    shell_write_str(shell_build_prompt());
+    if (*len != 0U) {
+        shell_write_all(buf, *len);
+    }
+    return 1;
+}
+
 static int32_t shell_read_line(char *buf, uint32_t cap) {
     uint32_t len = 0;
+    uint32_t history_browse_active = 0U;
+    uint32_t history_offset = 0U;
 
     if (!buf || cap == 0U) {
         return -1;
@@ -306,22 +593,51 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
         if (ch == '\r') {
             ch = '\n';
         }
-        if (ch == 27) {
-            if (g_shell_history_line[0] != '\0') {
-                shell_replace_line(buf,
-                                   &len,
-                                   cap,
-                                   g_shell_history_line,
-                                   user_strlen(g_shell_history_line));
-            } else if (len != 0U) {
+        if (ch == 27 || ch == 0x10) {
+            const char *history_line = 0;
+            uint32_t history_len = 0U;
+
+            if (g_shell_history_count == 0U) {
+                continue;
+            }
+            if (history_browse_active == 0U) {
+                history_browse_active = 1U;
+                history_offset = 0U;
+            } else if (history_offset + 1U < g_shell_history_count) {
+                history_offset++;
+            }
+            if (shell_history_get(history_offset, &history_line, &history_len) == 0) {
+                shell_replace_line(buf, &len, cap, history_line, history_len);
+            }
+            continue;
+        }
+        if (ch == 0x0e) {
+            const char *history_line = 0;
+            uint32_t history_len = 0U;
+
+            if (history_browse_active == 0U) {
+                continue;
+            }
+            if (history_offset > 0U) {
+                history_offset--;
+                if (shell_history_get(history_offset, &history_line, &history_len) == 0) {
+                    shell_replace_line(buf, &len, cap, history_line, history_len);
+                }
+            } else {
+                history_browse_active = 0U;
                 shell_replace_line(buf, &len, cap, 0, 0U);
             }
             continue;
         }
         if (ch == '\t') {
+            if (shell_try_complete_command(buf, &len, cap)) {
+                history_browse_active = 0U;
+                continue;
+            }
             ch = ' ';
         }
         if (ch == '\b' || ch == 0x7f) {
+            history_browse_active = 0U;
             if (len > 0U) {
                 len--;
                 shell_erase_one_char();
@@ -335,14 +651,14 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
             shell_write_str(kNewline);
             buf[len] = '\0';
             if (len != 0U) {
-                user_memcpy(g_shell_history_line, buf, len);
-                g_shell_history_line[len] = '\0';
+                shell_history_push(buf, len);
             }
             return (int32_t)len;
         }
         if (len + 1U >= cap) {
             continue;
         }
+        history_browse_active = 0U;
         buf[len++] = (char)ch;
         shell_write_all(&buf[len - 1U], 1U);
     }
@@ -562,6 +878,7 @@ static int shell_is_builtin_name(const char *cmd, uint32_t cmd_len) {
         return 0;
     }
     return user_str_eq_n(cmd, "help", cmd_len) ||
+           user_str_eq_n(cmd, "history", cmd_len) ||
            user_str_eq_n(cmd, "wait", cmd_len) ||
            user_str_eq_n(cmd, "ps", cmd_len) ||
            user_str_eq_n(cmd, "ls", cmd_len) ||
@@ -998,6 +1315,10 @@ static int shell_dispatch_builtin(struct shell_stage *stage) {
         shell_write_str(kHelp);
         return 1;
     }
+    if (user_str_eq_n(stage->cmd, "history", stage->cmd_len)) {
+        shell_run_history();
+        return 1;
+    }
     if (user_str_eq_n(stage->cmd, "wait", stage->cmd_len)) {
         shell_write_str(kWaitStub);
         return 1;
@@ -1039,6 +1360,10 @@ static int shell_dispatch_simple_line(const char *line) {
 
     if (user_str_eq_n(line + cmd_start, "help", cmd_end - cmd_start)) {
         shell_write_str(kHelp);
+        return 1;
+    }
+    if (user_str_eq_n(line + cmd_start, "history", cmd_end - cmd_start)) {
+        shell_run_history();
         return 1;
     }
     if (user_str_eq_n(line + cmd_start, "wait", cmd_end - cmd_start)) {

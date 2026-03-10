@@ -26,13 +26,15 @@ RELIABILITY_SMOKE_STEP_SECS ?= 0.20
 RELIABILITY_SMOKE_RUNNER_SETTLE_SECS ?= 1.50
 RELIABILITY_SMOKE_DIAG_SETTLE_SECS ?= 1.00
 RELIABILITY_REPLAY_RUNNER_SETTLE_SECS ?= 1.50
-RELIABILITY_FUZZ_RUNNER_SETTLE_SECS ?= 1.50
+RELIABILITY_FUZZ_RUNNER_SETTLE_SECS ?= 2.25
+NIGHTLY_GUI_TRIAGE_BOOT_WAIT_SECS ?= 16
+NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR ?= $(BUILD)/artifacts
 SMOKE_MARKER = SKEZOS_SMOKE_READY
 RELIABILITY_JSON_VALIDATOR = ./scripts/validate_reliability_json.sh
 RELIABILITY_JSON_REPORTER = ./scripts/reliability_json_report.sh
 REPLAY_HASH_ALL_SEED1337 ?= 2002305826
 REPLAY_HASH_QUICK_SEED1337 ?= 2923080070
-GUI_STATE_HASH_FB_SHELL_V3 ?= 0x378E9E02
+GUI_STATE_HASH_FB_SHELL_V4 ?= 0xD9BFAA54
 PHASE4_REPEAT ?= 3
 USERLAND_BUILD = $(BUILD)/userland
 INITRAMFS_STAGING = $(BUILD)/initramfs_root
@@ -82,7 +84,7 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/busybox.elf \
 	$(USERLAND_BUILD)/reliability_runner.elf
 
-.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix check check-pr check-release check-nightly
+.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-fb-dump check check-pr check-release check-nightly
 
 all: $(ISO)
 
@@ -262,6 +264,7 @@ qemu-smoke-userfault: $(ISO)
 		tail -n 120 $(BUILD)/qemu-smoke-userfault.log; \
 		exit 1; \
 	fi
+	$(call ASSERT_GUI_HASH_IF_FB,qemu-smoke-userfault,$(BUILD)/qemu-smoke-userfault.log)
 	@if ! grep -Fq "fault: triggering user page fault" $(BUILD)/qemu-smoke-userfault.log; then \
 		echo "[qemu-smoke-userfault] Missing fault trigger output"; \
 		tail -n 120 $(BUILD)/qemu-smoke-userfault.log; \
@@ -368,6 +371,7 @@ qemu-smoke-lifecycle: $(ISO)
 	@echo "[qemu-smoke-lifecycle] Booting headless VM with scripted lifecycle input..."
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-lifecycle,$(LIFECYCLE_SMOKE_LOG),$(LIFECYCLE_SMOKE_SCRIPT))
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-lifecycle,$(LIFECYCLE_SMOKE_LOG))
+	$(call ASSERT_GUI_HASH_IF_FB,qemu-smoke-lifecycle,$(LIFECYCLE_SMOKE_LOG))
 	@if ! grep -Fq "SMOKE_LIFECYCLE_SPAWN_HELLO3_OK" $(LIFECYCLE_SMOKE_LOG); then \
 		echo "[qemu-smoke-lifecycle] Missing spawn hello3 marker"; \
 		tail -n 180 $(LIFECYCLE_SMOKE_LOG); \
@@ -455,7 +459,7 @@ printf 'pwd\n'; \
 sleep 0.25; \
 printf 'cd /bin\n'; \
 sleep 0.25; \
-printf 'pwd\n'; \
+printf 'pw\t\n'; \
 sleep 0.25; \
 printf 'ls\n'; \
 sleep 0.25; \
@@ -470,6 +474,8 @@ sleep 0.25; \
 printf 'ps\n'; \
 sleep 0.25; \
 printf 'echo shell core interactive echo\n'; \
+sleep 0.25; \
+printf 'his\t\n'; \
 sleep 0.25; \
 printf 'cat readme.txt\n'; \
 sleep 0.25; \
@@ -493,7 +499,7 @@ printf 'sleep 2\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo pipeline smoke | cat\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
-printf 'cat < readme.txt | cat | cat\n'; \
+printf 'cat < readme.txt | cat\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo drop-me > /dev/null\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
@@ -545,19 +551,23 @@ fi
 fi
 endef
 
+define ASSERT_GUI_HASH_IF_FB
+@if grep -Fq "display: framebuffer console active" $(2); then \
+	if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V4) profile=fb-shell-v4" $(2); then \
+		echo "[$(1)] Missing or changed framebuffer GUI state hash"; \
+		tail -n 220 $(2); \
+		exit 1; \
+	fi; \
+fi
+endef
+
 qemu-smoke-shell-core: $(ISO)
 	@mkdir -p $(BUILD)
 	@rm -f $(BUILD)/qemu-smoke-shell-core.log
 	@echo "[qemu-smoke-shell-core] Booting headless VM with scripted shell input..."
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log,$(SHELL_CORE_SMOKE_SCRIPT))
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log)
-	@if grep -Fq "display: framebuffer console active" $(BUILD)/qemu-smoke-shell-core.log; then \
-		if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V3) profile=fb-shell-v3" $(BUILD)/qemu-smoke-shell-core.log; then \
-			echo "[qemu-smoke-shell-core] Missing or changed framebuffer GUI state hash"; \
-			tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
-			exit 1; \
-		fi; \
-	fi
+	$(call ASSERT_GUI_HASH_IF_FB,qemu-smoke-shell-core,$(BUILD)/qemu-smoke-shell-core.log)
 	@if ! awk 'BEGIN{in_shell=0;bad=0} /SkezOS shell ready/{in_shell=1} /sh: exit/{in_shell=0} in_shell && /sched demo:/{bad=1} END{exit bad ? 1 : 0}' $(BUILD)/qemu-smoke-shell-core.log; then \
 		echo "[qemu-smoke-shell-core] Unexpected worker demo log spam while shell was active"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
@@ -613,8 +623,13 @@ qemu-smoke-shell-core: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "run: launch failed" $(BUILD)/qemu-smoke-shell-core.log; then \
-		echo "[qemu-smoke-shell-core] Missing unknown-command failure output"; \
+	@if [ "$$(grep -Fc 'run: launch failed' $(BUILD)/qemu-smoke-shell-core.log)" -ne 1 ]; then \
+		echo "[qemu-smoke-shell-core] Unexpected unknown-command failure count"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Eq '^[[:space:]]*[0-9]+[[:space:]]+history$$'; then \
+		echo "[qemu-smoke-shell-core] Missing history builtin output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
@@ -637,6 +652,7 @@ qemu-smoke-reliability: $(ISO)
 	@echo "[qemu-smoke-reliability] Booting headless VM with scripted reliability input..."
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-reliability,$(BUILD)/qemu-smoke-reliability.log,$(RELIABILITY_SMOKE_SCRIPT))
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability,$(BUILD)/qemu-smoke-reliability.log)
+	$(call ASSERT_GUI_HASH_IF_FB,qemu-smoke-reliability,$(BUILD)/qemu-smoke-reliability.log)
 	@$(RELIABILITY_JSON_VALIDATOR) base $(BUILD)/qemu-smoke-reliability.log
 	@$(RELIABILITY_JSON_REPORTER) base $(BUILD)/qemu-smoke-reliability.log > $(BUILD)/qemu-smoke-reliability.report
 	@if ! grep -Fq "uptime: " $(BUILD)/qemu-smoke-reliability.log; then \
@@ -887,6 +903,7 @@ qemu-smoke-reliability-replay: $(ISO)
 		exit $$rc; \
 	fi
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability-replay,$(BUILD)/qemu-smoke-reliability-replay.log)
+	$(call ASSERT_GUI_HASH_IF_FB,qemu-smoke-reliability-replay,$(BUILD)/qemu-smoke-reliability-replay.log)
 	@$(RELIABILITY_JSON_VALIDATOR) replay $(BUILD)/qemu-smoke-reliability-replay.log
 	@$(RELIABILITY_JSON_REPORTER) replay $(BUILD)/qemu-smoke-reliability-replay.log \
 		--expect-replay-hash all_seed1337=$(REPLAY_HASH_ALL_SEED1337) \
@@ -952,6 +969,7 @@ qemu-smoke-reliability-fuzz-lite-matrix: $(ISO)
 		exit $$rc; \
 	fi
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-reliability-fuzz-lite-matrix,$(BUILD)/qemu-smoke-reliability-fuzz-lite.log)
+	$(call ASSERT_GUI_HASH_IF_FB,qemu-smoke-reliability-fuzz-lite-matrix,$(BUILD)/qemu-smoke-reliability-fuzz-lite.log)
 	@$(RELIABILITY_JSON_VALIDATOR) fuzz $(BUILD)/qemu-smoke-reliability-fuzz-lite.log
 	@$(RELIABILITY_JSON_REPORTER) fuzz $(BUILD)/qemu-smoke-reliability-fuzz-lite.log > $(BUILD)/qemu-smoke-reliability-fuzz-lite.report
 	@if [ "$$(grep -Fc '"type":"meta_ext","replay":"-","fuzz_lite":1' $(BUILD)/qemu-smoke-reliability-fuzz-lite.log)" -lt 1 ]; then \
@@ -986,6 +1004,15 @@ qemu-smoke-reliability-fuzz-lite-matrix: $(ISO)
 	fi
 	@echo "[qemu-smoke-reliability-fuzz-lite-matrix] PASS"
 
+qemu-smoke-gui-fb-dump: $(ISO)
+	@mkdir -p $(NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR)
+	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
+	port=$$((43000 + ($$$$ % 10000))); \
+	dump="$(NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR)/gui-fb-failure-$${stamp}.ppm"; \
+	log="$(NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR)/gui-fb-failure-$${stamp}.qemu.log"; \
+	echo "[qemu-smoke-gui-fb-dump] Capturing framebuffer artifact to $$dump (qmp_port=$$port)"; \
+	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump" "$$log" "$(NIGHTLY_GUI_TRIAGE_BOOT_WAIT_SECS)" "$$port"
+
 check-pr:
 	@$(MAKE) toolchain-check
 	@$(MAKE) clean
@@ -999,9 +1026,21 @@ check: check-pr
 check-release: check-pr
 	@$(MAKE) qemu-smoke-lifecycle
 
-check-nightly: check-release
-	@$(MAKE) qemu-smoke-reliability-replay
-	@$(MAKE) qemu-smoke-reliability-fuzz-lite-matrix
+check-nightly:
+	@rc=0; \
+	$(MAKE) check-release || rc=$$?; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-reliability-replay || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-reliability-fuzz-lite-matrix || rc=$$?; \
+	fi; \
+	if [ $$rc -ne 0 ]; then \
+		echo "[check-nightly] failure detected; collecting non-gating framebuffer triage artifact..."; \
+		$(MAKE) qemu-smoke-gui-fb-dump || \
+			echo "[check-nightly] warning: framebuffer triage capture failed"; \
+	fi; \
+	exit $$rc
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.elf

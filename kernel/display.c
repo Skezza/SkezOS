@@ -37,6 +37,16 @@ typedef enum {
     DISPLAY_PROMPT_HINT_FAIL = 3,
 } display_prompt_hint_t;
 
+typedef enum {
+    DISPLAY_TRANSITION_CAUSE_NONE = 0,
+    DISPLAY_TRANSITION_CAUSE_PROMPT = 1,
+    DISPLAY_TRANSITION_CAUSE_WAIT = 2,
+    DISPLAY_TRANSITION_CAUSE_LAUNCH_FAIL = 3,
+    DISPLAY_TRANSITION_CAUSE_SHELL_EXIT = 4,
+    DISPLAY_TRANSITION_CAUSE_ROLLOVER = 5,
+    DISPLAY_TRANSITION_CAUSE_HOLD_EXPIRE = 6,
+} display_transition_cause_t;
+
 struct display_timeline_entry {
     uint16_t duration_ticks;
     uint8_t event;
@@ -74,6 +84,7 @@ struct display_framebuffer_state {
     uint8_t prompt_hint;
     uint32_t prompt_hint_until_ticks;
     char prompt_hint_tag;
+    uint8_t transition_cause;
     uint8_t ready;
 };
 
@@ -204,6 +215,7 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
 #define DISPLAY_FB_PROMPT_HINT_HOLD_TICKS 120U
 #define DISPLAY_FB_TIMELINE_CAP 24U
 #define DISPLAY_FB_TIMELINE_RAIL_INSET 4U
+#define DISPLAY_FB_FOOTER_RAIL_LEFT_COLS 33U
 
 static uint32_t display_framebuffer_pack_rgb(uint8_t r, uint8_t g, uint8_t b);
 static void display_framebuffer_fill_rect_packed(uint32_t x, uint32_t y,
@@ -242,6 +254,8 @@ static int display_font_has_glyph(char c);
 static void display_verify_font_coverage(void);
 static uint32_t display_hash_u32(uint32_t hash, uint32_t value);
 static uint32_t display_compute_gui_state_hash(void);
+static const char *display_transition_cause_label(display_transition_cause_t cause);
+static void display_framebuffer_build_footer_legend(char *legend_text, uint32_t cap);
 static int display_line_starts_with(const char *text, uint32_t len, const char *prefix);
 static int display_line_contains(const char *text, uint32_t len, const char *needle);
 static int display_parse_wait_exit_code(const char *text, uint32_t len, int32_t *out_exit_code);
@@ -249,7 +263,7 @@ static int display_parse_prompt_command(const char *text, uint32_t len, char *ou
 static void display_timeline_push_event(display_timeline_event_t event,
                                         uint32_t duration_ticks,
                                         char tag);
-static void display_timeline_finish_active(int success);
+static void display_timeline_finish_active(int success, display_transition_cause_t cause);
 static void display_timeline_start_command(char tag);
 static void display_framebuffer_on_line_complete(const char *text,
                                                  uint32_t len,
@@ -390,11 +404,13 @@ static void display_prompt_hint_refresh(void) {
     }
     if (g_display_fb.prompt_hint_until_ticks == 0U) {
         display_prompt_hint_set(DISPLAY_PROMPT_HINT_INPUT, '?', 0U);
+        g_display_fb.transition_cause = DISPLAY_TRANSITION_CAUSE_HOLD_EXPIRE;
         return;
     }
     now_ticks = display_ticks32();
     if ((int32_t)(now_ticks - g_display_fb.prompt_hint_until_ticks) >= 0) {
         display_prompt_hint_set(DISPLAY_PROMPT_HINT_INPUT, '?', 0U);
+        g_display_fb.transition_cause = DISPLAY_TRANSITION_CAUSE_HOLD_EXPIRE;
     }
 }
 
@@ -620,7 +636,7 @@ static uint32_t display_hash_u32(uint32_t hash, uint32_t value) {
 static uint32_t display_compute_gui_state_hash(void) {
     uint32_t hash = 2166136261U;
 
-    hash = display_hash_u32(hash, 0x46425333U); /* "FBS3" */
+    hash = display_hash_u32(hash, 0x46425334U); /* "FBS4" */
     hash = display_hash_u32(hash, g_display_fb.info.width);
     hash = display_hash_u32(hash, g_display_fb.info.height);
     hash = display_hash_u32(hash, g_display_fb.info.pitch);
@@ -644,6 +660,7 @@ static uint32_t display_compute_gui_state_hash(void) {
     hash = display_hash_u32(hash, DISPLAY_FB_PROMPT_HINT_HOLD_TICKS);
     hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_CAP);
     hash = display_hash_u32(hash, DISPLAY_FB_TIMELINE_RAIL_INSET);
+    hash = display_hash_u32(hash, DISPLAY_FB_FOOTER_RAIL_LEFT_COLS);
 
     /* Include style palette IDs so visual tune-ups are regression-gated. */
     hash = display_hash_u32(hash, display_framebuffer_pack_rgb(13U, 24U, 42U));
@@ -667,6 +684,40 @@ static uint32_t display_compute_gui_state_hash(void) {
     hash = display_hash_u32(hash, display_framebuffer_pack_rgb(34U, 10U, 13U));
 
     return hash;
+}
+
+static const char *display_transition_cause_label(display_transition_cause_t cause) {
+    switch (cause) {
+    case DISPLAY_TRANSITION_CAUSE_PROMPT:
+        return "PROM";
+    case DISPLAY_TRANSITION_CAUSE_WAIT:
+        return "WAIT";
+    case DISPLAY_TRANSITION_CAUSE_LAUNCH_FAIL:
+        return "FAIL";
+    case DISPLAY_TRANSITION_CAUSE_SHELL_EXIT:
+        return "EXIT";
+    case DISPLAY_TRANSITION_CAUSE_ROLLOVER:
+        return "ROLL";
+    case DISPLAY_TRANSITION_CAUSE_HOLD_EXPIRE:
+        return "HOLD";
+    case DISPLAY_TRANSITION_CAUSE_NONE:
+    default:
+        return "BOOT";
+    }
+}
+
+static void display_framebuffer_build_footer_legend(char *legend_text, uint32_t cap) {
+    uint32_t len = 0U;
+    const char *cause =
+        display_transition_cause_label((display_transition_cause_t)g_display_fb.transition_cause);
+
+    if (cap == 0U) {
+        return;
+    }
+
+    legend_text[0] = '\0';
+    display_append_text(legend_text, &len, cap, "HUD I:IN R:RUN O:OK E:ERR C:");
+    display_append_text(legend_text, &len, cap, cause);
 }
 
 static uint32_t display_string_length(const char *text) {
@@ -802,7 +853,7 @@ static void display_timeline_push_event(display_timeline_event_t event,
     }
 }
 
-static void display_timeline_finish_active(int success) {
+static void display_timeline_finish_active(int success, display_transition_cause_t cause) {
     uint32_t now_ticks;
     uint32_t duration_ticks;
     char tag;
@@ -821,6 +872,7 @@ static void display_timeline_finish_active(int success) {
                                 tag);
     g_display_fb.command_active = 0U;
     g_display_fb.command_tag = '?';
+    g_display_fb.transition_cause = (uint8_t)cause;
     display_prompt_hint_set(success ? DISPLAY_PROMPT_HINT_OK : DISPLAY_PROMPT_HINT_FAIL,
                             tag,
                             DISPLAY_FB_PROMPT_HINT_HOLD_TICKS);
@@ -828,12 +880,13 @@ static void display_timeline_finish_active(int success) {
 
 static void display_timeline_start_command(char tag) {
     if (g_display_fb.command_active != 0U) {
-        display_timeline_finish_active(1);
+        display_timeline_finish_active(1, DISPLAY_TRANSITION_CAUSE_ROLLOVER);
     }
     g_display_fb.command_active = 1U;
     g_display_fb.command_start_ticks = (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL);
     g_display_fb.command_tag = tag;
     display_prompt_hint_set(DISPLAY_PROMPT_HINT_RUNNING, tag, 0U);
+    g_display_fb.transition_cause = DISPLAY_TRANSITION_CAUSE_PROMPT;
 }
 
 static void display_framebuffer_on_line_complete(const char *text,
@@ -857,15 +910,15 @@ static void display_framebuffer_on_line_complete(const char *text,
         if (display_line_contains(text, len, "run: launch failed") ||
             display_line_contains(text, len, "run: redirect open failed") ||
             display_line_contains(text, len, "spawn failed")) {
-            display_timeline_finish_active(0);
+            display_timeline_finish_active(0, DISPLAY_TRANSITION_CAUSE_LAUNCH_FAIL);
             footer_dirty = 1;
             prompt_dirty = 1;
         } else if (display_parse_wait_exit_code(text, len, &exit_code)) {
-            display_timeline_finish_active(exit_code == 0);
+            display_timeline_finish_active(exit_code == 0, DISPLAY_TRANSITION_CAUSE_WAIT);
             footer_dirty = 1;
             prompt_dirty = 1;
         } else if (display_line_starts_with(text, len, "sh: exit")) {
-            display_timeline_finish_active(1);
+            display_timeline_finish_active(1, DISPLAY_TRANSITION_CAUSE_SHELL_EXIT);
             footer_dirty = 1;
             prompt_dirty = 1;
         }
@@ -1147,7 +1200,7 @@ static void display_framebuffer_draw_footer_hud(void) {
     uint32_t footer_fg = display_framebuffer_pack_rgb(224U, 233U, 246U);
     uint32_t rail_bg = display_framebuffer_pack_rgb(8U, 15U, 29U);
     uint32_t rail_border = display_framebuffer_pack_rgb(74U, 102U, 136U);
-    uint32_t rail_left = 20U * DISPLAY_FB_CHAR_W;
+    uint32_t rail_left = DISPLAY_FB_FOOTER_RAIL_LEFT_COLS * DISPLAY_FB_CHAR_W;
     uint32_t rail_right = g_display_fb.info.width - DISPLAY_FB_CHAR_W;
     uint32_t rail_top = footer_top + 3U;
     uint32_t rail_h = DISPLAY_FB_CHAR_H - 6U;
@@ -1155,6 +1208,7 @@ static void display_framebuffer_draw_footer_hud(void) {
     uint32_t visible_finished;
     uint32_t slots_taken;
     uint32_t active_slots = g_display_fb.command_active != 0U ? 1U : 0U;
+    char legend_text[40];
 
     display_framebuffer_fill_rect_packed(
         0U,
@@ -1162,10 +1216,11 @@ static void display_framebuffer_draw_footer_hud(void) {
         g_display_fb.info.width,
         DISPLAY_FB_CHAR_H,
         footer_bg);
+    display_framebuffer_build_footer_legend(legend_text, sizeof(legend_text));
     display_framebuffer_draw_text_packed(
         DISPLAY_FB_CHAR_W,
         footer_top + 1U,
-        "GUI HUD  TIMELINE",
+        legend_text,
         footer_fg,
         footer_bg);
 
@@ -1494,6 +1549,7 @@ void display_init(void) {
     g_display_fb.prompt_hint = DISPLAY_PROMPT_HINT_INPUT;
     g_display_fb.prompt_hint_until_ticks = 0U;
     g_display_fb.prompt_hint_tag = '?';
+    g_display_fb.transition_cause = DISPLAY_TRANSITION_CAUSE_NONE;
     display_verify_font_coverage();
     vga_clear();
 }
@@ -1608,6 +1664,7 @@ void display_late_init(void) {
     g_display_fb.prompt_hint = DISPLAY_PROMPT_HINT_INPUT;
     g_display_fb.prompt_hint_until_ticks = 0U;
     g_display_fb.prompt_hint_tag = '?';
+    g_display_fb.transition_cause = DISPLAY_TRANSITION_CAUSE_NONE;
     g_display_fb.ready = 1U;
 
     display_framebuffer_draw_shell_frame();
@@ -1622,7 +1679,7 @@ void display_late_init(void) {
           info.height,
           info.pitch,
           (uint32_t)info.bpp);
-    KLOGI("display: gui_state_hash=%x profile=fb-shell-v3", gui_hash);
+    KLOGI("display: gui_state_hash=%x profile=fb-shell-v4", gui_hash);
 }
 
 uint32_t display_console_enter_critical(void) {
