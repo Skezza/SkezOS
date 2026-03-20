@@ -1,5 +1,24 @@
 # Agentic Worker Handover (2026-03-09)
 
+## Update (2026-03-12)
+- Active milestone is now **Phase 14.5 - Polish + Robustness hardening** for the recent storage/fork/shell features.
+- Landed since this handover:
+  - writable `/persist` vertical slice (`ATA PIO`, block cache, `persistfs`) + `SYS_UNLINK`
+  - per-task address spaces + `SYS_FORK` + copy-on-write page fault handling
+  - shell parser v2 (`quotes/escapes`) + background pipelines (`&`) + `waitpid(NO_HANG)` support
+- Hardening focus in progress:
+  - deterministic shell background overflow + functional `wait`
+  - `persistfs` clean-flag transitions + dirty-mount sanity pass
+  - COW pressure-path diagnostics and deterministic fork-failure handling
+- GUI readability follow-on landed:
+  - framebuffer font upgraded to crisp `5x7` source glyphs with unchanged terminal cell/layout geometry
+  - GUI state-hash profile moved to `fb-shell-v5` (`display: gui_state_hash=0x9A4C1DA5 profile=fb-shell-v5`)
+  - nightly visual ROI baseline targets `fb-shell-v5` hash `0x1BD7880D`
+- Explicit non-goals for this slice:
+  - no journaling/fsck redesign
+  - no shell `jobs`/`fg` builtins
+  - no COW allocator redesign (fixed metadata capacity remains)
+
 ## Snapshot
 - Repo: `SkezOS`
 - Branch: `main`

@@ -1,5 +1,23 @@
 # Current Milestone
 
+## Update (2026-03-12)
+- Active execution has moved beyond the old GUI-only slice to **Phase 14.5 hardening** for recently landed features:
+  - writable storage stack (`ATA PIO + block cache + /persist persistfs`) and `SYS_UNLINK`
+  - user `fork` with per-task address spaces and COW fault handling (`SYS_FORK`)
+  - shell parser v2 (`quote/escape aware`) + background pipelines (`&`) + `waitpid(NO_HANG)`
+- Current focus is polish/robustness only (no new syscall numbers in this slice):
+  - shell `wait` behavior for background jobs, deterministic overflow signaling, and replay stability
+  - `persistfs` clean-flag semantics and dirty-mount sanity handling
+  - COW pressure-path diagnostics and deterministic fork-failure behavior under capacity pressure
+- Landed GUI polish follow-on (Phase 15 font refresh):
+  - framebuffer console font upgraded to crisp `5x7` source glyphs while keeping existing `14x17` cell layout
+  - GUI profile/hash contract moved to `fb-shell-v5` (`display: gui_state_hash=0x9A4C1DA5 profile=fb-shell-v5`)
+  - nightly visual baseline now validates `fb-shell-v5` ROI hash `0x1BD7880D`
+- Remaining intentional limits:
+  - no journaling/fsck or crash-recovery redesign in `persistfs`
+  - no shell `jobs`/`fg` builtins yet
+  - fixed-size COW metadata table remains in place (hardened behavior around limits)
+
 ## Milestone
 Name: Phase 11 - GUI polish and visual shell operator HUD
 Target window: 3-5 days
@@ -33,6 +51,13 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - [x] Add one deterministic visual regression check strategy note for future CI use (`done`, `docs/gui_visual_regression_strategy.md`)
 - [x] Implement first deterministic GUI gate: framebuffer state hash line asserted in smoke (`done`)
 - [x] Add nightly-only non-gating framebuffer dump artifact capture on failure (`done`)
+- [x] Add nightly-gated masked framebuffer pixel baseline check (`done`, `qemu-smoke-gui-visual-baseline`)
+- [x] Add command-latency HUD telemetry in framebuffer footer (last/avg/peak + outcome/run) using existing shell lifecycle parsing only (`done`)
+- [x] Add command-health telemetry + recovery cue (ok/fail streak + recent cmd-rate) using existing shell lifecycle parsing only (`done`)
+- [x] Add command-health state machine (`OK/WARN/DEGR`) with prompt/footer cues and transition logs from existing shell lifecycle parsing only (`done`)
+- [x] Add rolling command-quality window telemetry and HUD exposure (`recent success %`) with deterministic logs (`done`)
+- [x] Add command-health recovery telemetry (`time-to-recover`) and HUD exposure with deterministic logs (`done`)
+- [x] Add adaptive command-latency budget telemetry (`in-budget` vs `slow`) with footer/header HUD exposure and deterministic logs (`done`)
 
 ## Immediate next GUI slices
 - Slice A (font coverage + fallback): complete printable ASCII glyph coverage in the bootstrap table, keep `?` fallback, and emit one boot-time coverage log line.
@@ -43,6 +68,14 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - [x] Start userland command-entry UX hints without parser/ABI growth: `Tab` now completes first-token command names (builtins + `/bin/*.elf`) and shows compact `hint:` candidates on ambiguity (`done`)
 - [x] Add lightweight history preview navigation without ABI churn: `Esc`/`Ctrl+P` browse backward through recent commands, `Ctrl+N` moves forward toward the current buffer (`done`)
 - [x] Expose bounded in-shell command history as a builtin (`history`) and gate it in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+- [x] Add `/persist`-backed shell history persistence + `history clear` management path and gate cross-boot replay/clear durability in nightly (`qemu-smoke-shell-history-persist`) without syscall/parser/ABI changes (`done`)
+- [x] Add reverse history search (`Ctrl+R`) with repeat-cycle behavior and deterministic `search:` hint lines, gated in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+- [x] Add fast line-edit kill shortcuts (`Ctrl+U` clear line, `Ctrl+W` erase previous word) and gate deterministic output behavior in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+- [x] Add history event recall shortcuts (`!!`, `!N`) with deterministic recall hint output, gated in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+- [x] Expand history event recall with relative/pattern selectors (`!-N`, `!prefix`, `!?term`) and deterministic hint output, gated in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+- [x] Add quick substitution replay (`^old^new^`) against latest history command with deterministic hint/output gating in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+- [x] Add prefix-filtered history browse (`Esc`/`Ctrl+P` + `Ctrl+N` on typed prefix) with deterministic replay gating in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
+- [x] Add `history run N` replay execution (by displayed history index) with deterministic hint/output gating in `qemu-smoke-shell-core` without syscall/parser/ABI changes (`done`)
 
 ## Phase 13 candidate (GUI regression hardening)
 - [x] Promote framebuffer GUI hash assertions from shell-core-only to the shell-facing smoke suite (`qemu-smoke-userfault`, `qemu-smoke-lifecycle`, `qemu-smoke-reliability`, replay, and fuzz-lite), while keeping hash checks conditional on framebuffer mode (`done`)
@@ -82,6 +115,21 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - 2026-03-10 - Reliability sequencing hardening: raised `RELIABILITY_FUZZ_RUNNER_SETTLE_SECS` to `2.25` to keep fuzz-lite command injection aligned with console ownership handoff and avoid intermittent JSON validator failures in nightly runs.
 - 2026-03-10 - Artifact-triage hardening follow-up: framebuffer dump capture now validates PPM headers and writes sidecar `.meta` files (timestamp, geometry, size, sha256, qmp settings) so nightly failure artifacts are deterministic and machine-readable.
 - 2026-03-10 - Artifact-triage usability follow-up: capture now also updates `gui-fb-failure-latest.*` pointers and emits a stable `GUI_FB_DUMP_META ...` summary line for automation-friendly post-failure ingestion.
+- 2026-03-11 - Landed masked pixel-baseline gate for framebuffer GUI: new `scripts/gui_visual_baseline.py` computes profile-aware ROI hashes, `qemu-smoke-gui-visual-baseline` now asserts expected `fb-shell-v4` ROI hash (`0x1BD7880D`) in nightly, and `qemu-smoke-gui-visual-baseline-refresh` provides deterministic baseline refresh output.
+- 2026-03-11 - Landed framebuffer command-latency HUD telemetry: footer legend now includes compact command timing stats (`last/avg/peak`, outcome, and active run ticks) derived from existing prompt/wait/fail transitions with no syscall/parser/ABI changes; `qemu-smoke-shell-core` now asserts `display: cmd_latency ...` telemetry lines.
+- 2026-03-11 - Landed framebuffer command-health telemetry follow-up: header metrics now include compact command health (`ok/fail`, active fail streak, recent commands-per-minute), prompt input state now shows a subtle `CHK <n>` recovery cue after consecutive failures, and `qemu-smoke-shell-core` now asserts emitted `display: cmd_health ...` telemetry lines.
+- 2026-03-11 - Landed framebuffer command-health state slice: command outcomes now drive a bounded `OK/WARN/DEGR` state machine (fail-streak + success-rate), footer legend now shows `H:<state>`, prompt lane adapts to `WARN/DEGR` recovery cues, and shell-core smoke now asserts emitted `display: cmd_health_state ...` transitions.
+- 2026-03-11 - Landed rolling command-quality window slice: recent command outcomes now feed a bounded rolling success window (`R%`) shown in header/footer HUD, health-state classification now prefers recent window quality when populated, and shell-core smoke now asserts emitted `display: cmd_health_window ...` logs.
+- 2026-03-11 - Landed command-health recovery slice: health-state transitions now account for dwell in `WARN/DEGR`, emit deterministic `display: cmd_health_recovery ...` lines with last/avg/peak recovery ticks, and expose compact recovery timing (`X`) in header/footer HUD telemetry.
+- 2026-03-11 - Landed adaptive latency-budget slice: command completion telemetry now classifies each command against an adaptive budget (`display: cmd_latency_budget ...`), header/footer HUD now surface slow-command context (`L`, `B`, `S`), and shell-core smoke now asserts latency-budget logs.
+- 2026-03-11 - Landed persistent shell-history slice: shell now loads/saves bounded history at `/persist/.sh_history` when writable storage is present, supports `history clear`, retries persistence after transient write-open failures, and nightly now validates replay plus clear durability via `qemu-smoke-shell-history-persist`.
+- 2026-03-11 - Landed reverse-history-search slice: shell input now supports `Ctrl+R` reverse lookup across bounded history with repeat-cycle semantics, emits deterministic `search: <query> -> <match>` hints, and shell-core smoke now asserts the hint contract.
+- 2026-03-11 - Landed line-edit accelerators slice: shell input now supports `Ctrl+U` (kill line) and `Ctrl+W` (kill previous word) in the prompt editor, and shell-core smoke now asserts deterministic edited-command output (`ctrlu-ok`, `alpha gamma`).
+- 2026-03-11 - Landed history event-recall slice: shell now supports `!!` (latest) and `!N` (history index in current bounded window), emits deterministic `history: <event> -> <command>` hints, and shell-core smoke now asserts replay output (`recall-target`) plus hint contract.
+- 2026-03-11 - Landed advanced history event-recall slice: shell event expansion now also supports `!-N` (relative), `!prefix` (latest prefix match), and `!?term` (latest contains match), with deterministic `history: <event> -> <command>` hints asserted by shell-core smoke.
+- 2026-03-11 - Landed history quick-substitution slice: shell now supports `^old^new^` against the latest history command, emits deterministic `history: ^old^new^ -> <command>` hints, and shell-core smoke now asserts substituted replay output (`recall-target2`).
+- 2026-03-11 - Landed prefix-filtered history browse slice: when a prefix is typed, `Esc`/`Ctrl+P` now traverses only matching history entries and `Ctrl+N` moves forward/restores the typed prefix; shell-core smoke now asserts deterministic replay output (`pref-two` appears twice).
+- 2026-03-11 - Landed indexed history replay slice: `history run N` now executes an entry by current displayed history index, emits deterministic `history: run N -> <command>` hints, and shell-core smoke now asserts replay execution output (`run-target` appears twice).
 - 2026-03-09 - Landed line-density/readability pass: framebuffer glyph baseline and chrome contrast were tuned, hot-path HUD redraws were tightened, and reliability smoke sequencing was made deterministic under unchanged smoke timeout values.
 - 2026-03-09 - Landed shell chrome interaction slice: prompt-lane status now tracks command lifecycle using existing output transitions (`RUN`, `OK`, `ERR` with command tag) and no syscall/ABI changes.
 - 2026-03-09 - Added deterministic visual-regression strategy note: `docs/gui_visual_regression_strategy.md`.
