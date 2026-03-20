@@ -29,11 +29,19 @@ typedef int (*vfs_list_fn_t)(struct vfs_node *dir,
                              uint32_t entry_cap,
                              uint32_t *out_count);
 typedef int (*vfs_open_fn_t)(struct vfs_node *node, uint32_t open_flags, struct kfile *out_file);
+typedef int (*vfs_create_open_fn_t)(struct vfs_node *dir,
+                                    const char *name,
+                                    uint32_t name_len,
+                                    uint32_t open_flags,
+                                    struct kfile *out_file);
+typedef int (*vfs_unlink_fn_t)(struct vfs_node *dir, const char *name, uint32_t name_len);
 
 struct vfs_node_ops {
     vfs_lookup_fn_t lookup;
     vfs_list_fn_t list;
     vfs_open_fn_t open;
+    vfs_create_open_fn_t create_open;
+    vfs_unlink_fn_t unlink;
 };
 
 struct vfs_node {
@@ -68,6 +76,7 @@ int vfs_register_root_child(const char *name, struct vfs_node *node);
  */
 int vfs_lookup(const char *path, struct vfs_node **out_node);
 int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file);
+int vfs_unlink(const char *path);
 int vfs_list_dir(const char *path,
                  struct vfs_dir_entry *entries,
                  uint32_t entry_cap,

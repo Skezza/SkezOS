@@ -16,6 +16,7 @@
 #define VFS_BOOTSTRAP_ROOT_MAX_CHILDREN 32U
 #define VFS_ROOT_RAMFILE_MAX 16U
 #define VFS_ROOT_RAMFILE_CAPACITY 4096U
+#define VFS_PATH_MAX 128U
 
 struct vfs_static_dir_entry {
     const char *name;
@@ -56,9 +57,21 @@ static int vfs_root_ramfile_write(struct kfile *file,
                                   const void *buf,
                                   uint32_t len,
                                   uint32_t *out_written);
-static int vfs_root_create_or_open_ramfile(const char *path,
+static int vfs_root_create_or_open_ramfile(const char *name,
+                                           uint32_t name_len,
                                            uint32_t open_flags,
                                            struct kfile *out_file);
+static int vfs_root_create_open(struct vfs_node *dir,
+                                const char *name,
+                                uint32_t name_len,
+                                uint32_t open_flags,
+                                struct kfile *out_file);
+static int vfs_root_unlink(struct vfs_node *dir, const char *name, uint32_t name_len);
+static int vfs_split_parent_child(const char *path,
+                                  char *out_parent,
+                                  uint32_t parent_cap,
+                                  const char **out_child,
+                                  uint32_t *out_child_len);
 static void vfs_console_write_lock(void);
 static void vfs_console_write_unlock(void);
 
@@ -66,24 +79,40 @@ static const struct vfs_node_ops g_vfs_static_dir_ops = {
     .lookup = vfs_static_dir_lookup,
     .list = vfs_static_dir_list,
     .open = 0,
+    .create_open = 0,
+    .unlink = 0,
+};
+
+static const struct vfs_node_ops g_vfs_root_dir_ops = {
+    .lookup = vfs_static_dir_lookup,
+    .list = vfs_static_dir_list,
+    .open = 0,
+    .create_open = vfs_root_create_open,
+    .unlink = vfs_root_unlink,
 };
 
 static const struct vfs_node_ops g_vfs_console_node_ops = {
     .lookup = 0,
     .list = 0,
     .open = vfs_console_open,
+    .create_open = 0,
+    .unlink = 0,
 };
 
 static const struct vfs_node_ops g_vfs_null_node_ops = {
     .lookup = 0,
     .list = 0,
     .open = vfs_null_open,
+    .create_open = 0,
+    .unlink = 0,
 };
 
 static const struct vfs_node_ops g_vfs_root_ramfile_node_ops = {
     .lookup = 0,
     .list = 0,
     .open = vfs_root_ramfile_open,
+    .create_open = 0,
+    .unlink = 0,
 };
 
 static struct vfs_node g_vfs_root_node;
@@ -112,7 +141,7 @@ static const struct vfs_static_dir g_vfs_dev_dir = {
 static struct vfs_node g_vfs_root_node = {
     .name = "/",
     .type = VFS_NODE_DIR,
-    .ops = &g_vfs_static_dir_ops,
+    .ops = &g_vfs_root_dir_ops,
     .backend_private = (void *)(uintptr_t)&g_vfs_root_dir,
 };
 
@@ -481,27 +510,16 @@ static int vfs_root_ramfile_write(struct kfile *file,
     return 0;
 }
 
-static int vfs_root_create_or_open_ramfile(const char *path,
+static int vfs_root_create_or_open_ramfile(const char *name,
+                                           uint32_t name_len,
                                            uint32_t open_flags,
                                            struct kfile *out_file) {
-    const char *name;
-    uint32_t name_len = 0U;
     struct vfs_root_ram_file *slot = 0;
     uint32_t free_idx = VFS_ROOT_RAMFILE_MAX;
-    int rc;
+    int rc = 0;
 
-    if (!path || !out_file || path[0] != '/') {
+    if (!name || !out_file) {
         return -KERR_INVAL;
-    }
-    if (path[1] == '\0') {
-        return -KERR_INVAL;
-    }
-    name = path + 1U;
-    while (name[name_len] != '\0') {
-        if (name[name_len] == '/') {
-            return -KERR_NOENT;
-        }
-        name_len++;
     }
     if (name_len == 0U || name_len >= VFS_DIR_ENTRY_NAME_MAX) {
         return -KERR_INVAL;
@@ -543,6 +561,113 @@ static int vfs_root_create_or_open_ramfile(const char *path,
 
     rc = vfs_root_ramfile_open(&slot->node, open_flags, out_file);
     return rc;
+}
+
+static int vfs_root_create_open(struct vfs_node *dir,
+                                const char *name,
+                                uint32_t name_len,
+                                uint32_t open_flags,
+                                struct kfile *out_file) {
+    if (!dir || dir != &g_vfs_root_node || !name || !out_file) {
+        return -KERR_INVAL;
+    }
+    return vfs_root_create_or_open_ramfile(name, name_len, open_flags, out_file);
+}
+
+static int vfs_root_unlink(struct vfs_node *dir, const char *name, uint32_t name_len) {
+    struct vfs_root_ram_file *slot = 0;
+    uint32_t entry_idx = VFS_BOOTSTRAP_ROOT_MAX_CHILDREN;
+
+    if (!dir || dir != &g_vfs_root_node || !name || name_len == 0U) {
+        return -KERR_INVAL;
+    }
+
+    for (uint32_t i = 0U; i < VFS_ROOT_RAMFILE_MAX; i++) {
+        struct vfs_root_ram_file *candidate = &g_vfs_root_ramfiles[i];
+        if (candidate->in_use && vfs_name_eq(candidate->name, name, name_len)) {
+            slot = candidate;
+            break;
+        }
+    }
+    if (!slot) {
+        return -KERR_NOENT;
+    }
+
+    for (uint32_t i = 0U; i < g_vfs_root_dir.count; i++) {
+        if (g_vfs_root_entries[i].node == &slot->node) {
+            entry_idx = i;
+            break;
+        }
+    }
+    if (entry_idx >= g_vfs_root_dir.count) {
+        return -KERR_FAULT;
+    }
+
+    for (uint32_t i = entry_idx; i + 1U < g_vfs_root_dir.count; i++) {
+        g_vfs_root_entries[i] = g_vfs_root_entries[i + 1U];
+    }
+    g_vfs_root_entries[g_vfs_root_dir.count - 1U].name = 0;
+    g_vfs_root_entries[g_vfs_root_dir.count - 1U].node = 0;
+    g_vfs_root_dir.count--;
+
+    memset(slot, 0, sizeof(*slot));
+    return 0;
+}
+
+static int vfs_split_parent_child(const char *path,
+                                  char *out_parent,
+                                  uint32_t parent_cap,
+                                  const char **out_child,
+                                  uint32_t *out_child_len) {
+    uint32_t path_len;
+    uint32_t end;
+    uint32_t split;
+
+    if (!path || !out_parent || !out_child || !out_child_len || parent_cap < 2U) {
+        return -KERR_INVAL;
+    }
+    if (path[0] != '/') {
+        return -KERR_INVAL;
+    }
+
+    path_len = (uint32_t)strlen(path);
+    if (path_len == 0U) {
+        return -KERR_INVAL;
+    }
+
+    end = path_len;
+    while (end > 1U && path[end - 1U] == '/') {
+        end--;
+    }
+    if (end <= 1U) {
+        return -KERR_INVAL;
+    }
+
+    split = end;
+    while (split > 0U && path[split - 1U] != '/') {
+        split--;
+    }
+    if (split >= end) {
+        return -KERR_INVAL;
+    }
+
+    *out_child = path + split;
+    *out_child_len = end - split;
+    if (*out_child_len == 0U) {
+        return -KERR_INVAL;
+    }
+
+    if (split == 0U) {
+        out_parent[0] = '/';
+        out_parent[1] = '\0';
+        return 0;
+    }
+    if (split >= parent_cap) {
+        return -KERR_INVAL;
+    }
+    memcpy(out_parent, path, split);
+    out_parent[split] = '\0';
+    return 0;
 }
 
 static void vfs_bootstrap_self_check(void) {
@@ -695,9 +820,13 @@ int vfs_lookup(const char *path, struct vfs_node **out_node) {
 
 int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file) {
     struct vfs_node *node;
+    struct vfs_node *parent;
+    char parent_path[VFS_PATH_MAX];
+    const char *child_name = 0;
+    uint32_t child_name_len = 0U;
     int rc;
 
-    if (!out_file) {
+    if (!path || !out_file) {
         return -KERR_INVAL;
     }
 
@@ -705,7 +834,29 @@ int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file) {
     rc = vfs_lookup(path, &node);
     if (rc < 0) {
         if (rc == -KERR_NOENT && (open_flags & SYSCALL_OPEN_FLAG_CREATE) != 0U) {
-            return vfs_root_create_or_open_ramfile(path, open_flags, out_file);
+            rc = vfs_split_parent_child(path,
+                                        parent_path,
+                                        sizeof(parent_path),
+                                        &child_name,
+                                        &child_name_len);
+            if (rc < 0) {
+                return rc;
+            }
+            rc = vfs_lookup(parent_path, &parent);
+            if (rc < 0) {
+                return rc;
+            }
+            if (!parent || parent->type != VFS_NODE_DIR) {
+                return -KERR_NOTSUP;
+            }
+            if (!parent->ops || !parent->ops->create_open) {
+                return -KERR_NOTSUP;
+            }
+            return parent->ops->create_open(parent,
+                                            child_name,
+                                            child_name_len,
+                                            open_flags,
+                                            out_file);
         }
         return rc;
     }
@@ -713,6 +864,38 @@ int vfs_open(const char *path, uint32_t open_flags, struct kfile *out_file) {
         return -KERR_NOTSUP;
     }
     return node->ops->open(node, open_flags, out_file);
+}
+
+int vfs_unlink(const char *path) {
+    struct vfs_node *parent;
+    char parent_path[VFS_PATH_MAX];
+    const char *child_name = 0;
+    uint32_t child_name_len = 0U;
+    int rc;
+
+    if (!path) {
+        return -KERR_INVAL;
+    }
+
+    rc = vfs_split_parent_child(path,
+                                parent_path,
+                                sizeof(parent_path),
+                                &child_name,
+                                &child_name_len);
+    if (rc < 0) {
+        return rc;
+    }
+    rc = vfs_lookup(parent_path, &parent);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!parent || parent->type != VFS_NODE_DIR) {
+        return -KERR_NOTSUP;
+    }
+    if (!parent->ops || !parent->ops->unlink) {
+        return -KERR_NOTSUP;
+    }
+    return parent->ops->unlink(parent, child_name, child_name_len);
 }
 
 int vfs_list_dir(const char *path,

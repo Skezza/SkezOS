@@ -1,6 +1,7 @@
 	.global gdt_flush
 	.global tss_flush
 	.global enter_user_mode
+	.global enter_user_mode_full
 
 /* void gdt_flush(uint32_t *gdt_ptr) */
 gdt_flush:
@@ -43,4 +44,29 @@ enter_user_mode:
 	push %eax
 	pushl $0x1B         /* user CS */
 	push %ecx           /* user EIP */
+	iret
+
+/* void enter_user_mode_full(const struct user_mode_resume_ctx *ctx) */
+enter_user_mode_full:
+	mov 4(%esp), %eax   /* ctx */
+
+	mov $0x23, %dx
+	mov %dx, %ds
+	mov %dx, %es
+	mov %dx, %fs
+	mov %dx, %gs
+
+	pushl $0x23         /* user SS */
+	pushl 32(%eax)      /* user ESP */
+	pushl 36(%eax)      /* EFLAGS */
+	pushl $0x1B         /* user CS */
+	pushl 28(%eax)      /* user EIP */
+
+	mov 20(%eax), %edi
+	mov 16(%eax), %esi
+	mov 24(%eax), %ebp
+	mov 4(%eax), %ebx
+	mov 8(%eax), %ecx
+	mov 12(%eax), %edx
+	mov 0(%eax), %eax
 	iret

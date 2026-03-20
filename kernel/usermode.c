@@ -24,6 +24,7 @@ static int g_user_fault_stack_prepared;
 static int g_user_elf_demo_a_spawned;
 static int g_user_elf_demo_b_spawned;
 static int g_user_shell_spawned;
+static int g_user_shell_pid = -1;
 
 #define USERMODE_SPAWN_PATH_MAX 64U
 #define USERMODE_CMDLINE_MAX    128U
@@ -48,6 +49,7 @@ struct usermode_child_slot {
     uint32_t stack_base;
     uint32_t stack_size;
     uint32_t cmdline_len;
+    int owner_pid;
     int used;
 };
 
@@ -88,6 +90,7 @@ static struct usermode_child_slot g_user_child_slot2 = {
     .stack_base = USER_ELF_SLOT2_STACK_BASE,
     .stack_size = USER_ELF_SLOT2_STACK_SIZE_BYTES,
     .cmdline_len = 0U,
+    .owner_pid = -1,
     .used = 0,
 };
 
@@ -101,6 +104,7 @@ static struct usermode_child_slot g_user_child_slot3 = {
     .stack_base = USER_ELF_SLOT3_STACK_BASE,
     .stack_size = USER_ELF_SLOT3_STACK_SIZE_BYTES,
     .cmdline_len = 0U,
+    .owner_pid = -1,
     .used = 0,
 };
 
@@ -114,6 +118,7 @@ static struct usermode_child_slot g_user_child_slot5 = {
     .stack_base = USER_ELF_SLOT5_STACK_BASE,
     .stack_size = USER_ELF_SLOT5_STACK_SIZE_BYTES,
     .cmdline_len = 0U,
+    .owner_pid = -1,
     .used = 0,
 };
 
@@ -126,23 +131,81 @@ static struct usermode_child_slot *g_user_child_slots[] = {
 #define USERMODE_CHILD_SLOT_COUNT \
     ((uint32_t)(sizeof(g_user_child_slots) / sizeof(g_user_child_slots[0])))
 
-static int usermode_str_eq(const char *a, const char *b) {
-    uint32_t i = 0;
-
-    if (!a || !b) {
-        return 0;
-    }
-    while (a[i] != '\0' && b[i] != '\0') {
-        if (a[i] != b[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return a[i] == '\0' && b[i] == '\0';
-}
-
 static int usermode_is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static int usermode_parse_cmdline_arg(const char *cmdline,
+                                      uint32_t cmdline_len,
+                                      uint32_t *io_idx,
+                                      char *dst,
+                                      uint32_t dst_cap,
+                                      uint32_t *out_len) {
+    uint32_t idx;
+    uint32_t out_idx = 0U;
+    int in_single = 0;
+    int in_double = 0;
+
+    if (!cmdline || !io_idx || !dst || dst_cap == 0U || !out_len) {
+        return -KERR_INVAL;
+    }
+    idx = *io_idx;
+    while (idx < cmdline_len && usermode_is_space(cmdline[idx])) {
+        idx++;
+    }
+    if (idx >= cmdline_len) {
+        *io_idx = idx;
+        *out_len = 0U;
+        return 1;
+    }
+
+    for (;;) {
+        char ch;
+
+        if (idx >= cmdline_len) {
+            break;
+        }
+        ch = cmdline[idx];
+
+        if (!in_single && ch == '\\') {
+            idx++;
+            if (idx >= cmdline_len) {
+                return -KERR_INVAL;
+            }
+            if (out_idx + 1U >= dst_cap) {
+                return -KERR_NOMEM;
+            }
+            dst[out_idx++] = cmdline[idx++];
+            continue;
+        }
+        if (!in_double && ch == '\'') {
+            in_single = !in_single;
+            idx++;
+            continue;
+        }
+        if (!in_single && ch == '"') {
+            in_double = !in_double;
+            idx++;
+            continue;
+        }
+        if (!in_single && !in_double && usermode_is_space(ch)) {
+            break;
+        }
+        if (out_idx + 1U >= dst_cap) {
+            return -KERR_NOMEM;
+        }
+        dst[out_idx++] = ch;
+        idx++;
+    }
+
+    if (in_single || in_double) {
+        return -KERR_INVAL;
+    }
+
+    dst[out_idx] = '\0';
+    *out_len = out_idx;
+    *io_idx = idx;
+    return 0;
 }
 
 static int usermode_copy_cstr(char *dst, uint32_t dst_cap, const char *src) {
@@ -168,11 +231,13 @@ static int usermode_prepare_child_start_stack(const struct usermode_child_slot *
     const char *argv_src[USERMODE_ARG_MAX];
     uint32_t argv_len[USERMODE_ARG_MAX];
     uint32_t argv_user[USERMODE_ARG_MAX];
+    char parsed_args[USERMODE_CMDLINE_MAX];
     uint32_t argc = 0;
     uint32_t sp = stack_top;
     uint32_t argv_table_addr;
     uint32_t frame_addr;
     uint32_t idx = 0;
+    uint32_t parsed_used = 0U;
 
     if (!slot || !out_entry_esp) {
         return -KERR_INVAL;
@@ -186,26 +251,32 @@ static int usermode_prepare_child_start_stack(const struct usermode_child_slot *
     argc++;
 
     while (idx < slot->cmdline_len) {
-        uint32_t start;
+        uint32_t arg_len = 0U;
+        int rc;
 
-        while (idx < slot->cmdline_len && usermode_is_space(slot->cmdline[idx])) {
-            idx++;
-        }
-        if (idx >= slot->cmdline_len) {
-            break;
-        }
-
-        start = idx;
-        while (idx < slot->cmdline_len && !usermode_is_space(slot->cmdline[idx])) {
-            idx++;
-        }
         if (argc >= USERMODE_ARG_MAX) {
             return -KERR_NOMEM;
         }
+        if (parsed_used >= sizeof(parsed_args)) {
+            return -KERR_NOMEM;
+        }
 
-        argv_src[argc] = slot->cmdline + start;
-        argv_len[argc] = idx - start;
+        rc = usermode_parse_cmdline_arg(slot->cmdline,
+                                        slot->cmdline_len,
+                                        &idx,
+                                        parsed_args + parsed_used,
+                                        (uint32_t)(sizeof(parsed_args) - parsed_used),
+                                        &arg_len);
+        if (rc == 1) {
+            break;
+        }
+        if (rc < 0) {
+            return rc;
+        }
+        argv_src[argc] = parsed_args + parsed_used;
+        argv_len[argc] = arg_len;
         argc++;
+        parsed_used += arg_len + 1U;
     }
 
     for (uint32_t i = argc; i > 0U; i--) {
@@ -257,10 +328,10 @@ static struct usermode_child_slot *usermode_child_slot_acquire(uint32_t image_ba
     return 0;
 }
 
-static struct usermode_child_slot *usermode_child_slot_by_task_name(const char *task_name) {
+static struct usermode_child_slot *usermode_child_slot_by_owner_pid(int pid) {
     for (uint32_t i = 0; i < USERMODE_CHILD_SLOT_COUNT; i++) {
         struct usermode_child_slot *slot = g_user_child_slots[i];
-        if (slot && slot->task_name && usermode_str_eq(task_name, slot->task_name)) {
+        if (slot && slot->used && slot->owner_pid == pid) {
             return slot;
         }
     }
@@ -494,6 +565,7 @@ int usermode_spawn_shell_task(void) {
         return rc;
     }
     g_user_shell_spawned = 1;
+    g_user_shell_pid = rc;
     return 0;
 }
 
@@ -547,6 +619,7 @@ int usermode_spawn_path_task_ex(const char *path,
     slot->cmdline_len = cmdline_len;
     slot->image_base = layout.image_base;
     slot->image_size = layout.image_size;
+    slot->owner_pid = -1;
 
     slot->used = 1;
     rc = sched_spawn_user_child_task(slot->task_name,
@@ -562,8 +635,10 @@ int usermode_spawn_path_task_ex(const char *path,
         slot->cmdline_len = 0U;
         slot->image_base = 0U;
         slot->image_size = 0U;
+        slot->owner_pid = -1;
         return rc;
     }
+    slot->owner_pid = child_pid;
 
     KLOGI("usermode: spawned path task path=%s pid=%d slot=%x..%x",
           slot->path,
@@ -573,20 +648,21 @@ int usermode_spawn_path_task_ex(const char *path,
     return child_pid;
 }
 
-void usermode_notify_task_reaped(const char *task_name) {
+void usermode_notify_task_reaped(int pid) {
     struct usermode_child_slot *slot;
     uint32_t image_base;
     uint32_t image_size;
 
-    if (!task_name) {
+    if (pid <= 0) {
         return;
     }
-    if (usermode_str_eq(task_name, "user-shell")) {
+    if (pid == g_user_shell_pid) {
         g_user_shell_spawned = 0;
+        g_user_shell_pid = -1;
         vfs_console_set_input_owner_kernel();
         return;
     }
-    slot = usermode_child_slot_by_task_name(task_name);
+    slot = usermode_child_slot_by_owner_pid(pid);
     if (!slot || !slot->used) {
         return;
     }
@@ -599,8 +675,10 @@ void usermode_notify_task_reaped(const char *task_name) {
     slot->cmdline_len = 0U;
     slot->image_base = 0U;
     slot->image_size = 0U;
-    KLOGI("usermode: released spawn slot task=%s image=%x..%x",
-          task_name,
+    slot->owner_pid = -1;
+    KLOGI("usermode: released spawn slot task=%s pid=%d image=%x..%x",
+          slot->task_name,
+          pid,
           image_base,
           image_base + image_size);
 }

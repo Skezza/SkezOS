@@ -8,6 +8,7 @@
 #include "gdt.h"
 #include "klog.h"
 #include "kmalloc.h"
+#include "paging.h"
 #include "proc_fd.h"
 #include "syscall_abi.h"
 #include "timer.h"
@@ -55,6 +56,8 @@ struct task_user_ctx {
     char cwd[SCHED_CWD_MAX];
     int32_t exit_code;
     int exit_code_valid;
+    struct user_mode_resume_ctx fork_ctx;
+    int fork_ctx_valid;
 };
 
 struct task {
@@ -76,6 +79,7 @@ struct task {
     int wait_target_pid;
     struct proc_fd_table fd_table;
     struct task_user_ctx user;
+    struct paging_address_space *address_space;
 };
 
 extern void sched_context_switch(uint32_t *old_esp, uint32_t new_esp);
@@ -92,6 +96,7 @@ static uint32_t g_context_switches;
 static uint32_t g_idle_ticks;
 static uint32_t g_need_resched;
 static void *g_deferred_stack_free;
+static struct paging_address_space *g_deferred_as_free;
 
 static inline void sched_cli(void) {
     __asm__ __volatile__("cli");
@@ -119,6 +124,7 @@ static int sched_find_matching_zombie_child_locked(struct task *parent,
                                                    struct task **out_zombie,
                                                    int *out_has_matching_child);
 static void sched_flush_deferred_stack_free_locked(void);
+static void sched_flush_deferred_as_free_locked(void);
 static int sched_range_ok(uint32_t addr, uint32_t len, uint32_t base, uint32_t size);
 static int sched_ranges_overlap(uint32_t base_a,
                                 uint32_t size_a,
@@ -126,6 +132,10 @@ static int sched_ranges_overlap(uint32_t base_a,
                                 uint32_t size_b);
 static uint32_t sched_state_to_syscall_state(task_state_t state);
 static void sched_init_task_cwd(struct task *task);
+static int sched_build_user_ranges(const struct task *task,
+                                   struct paging_user_range *ranges,
+                                   uint32_t *out_count);
+static void sched_user_fork_child_entry(void *arg);
 
 static void sched_panic_unexpected_return(void) {
     KLOGP("scheduler returned to unexpected context");
@@ -174,6 +184,7 @@ static void sched_reap_task_locked(struct task *task) {
     int pid;
     char name[SCHED_TASK_NAME_MAX];
     uint8_t *stack_base;
+    struct paging_address_space *aspace;
 
     if (!task || task->state == TASK_UNUSED || task == g_current_task) {
         return;
@@ -182,9 +193,8 @@ static void sched_reap_task_locked(struct task *task) {
     pid = task->pid;
     sched_copy_task_name(name, task->name);
     stack_base = task->stack_base;
-    if (task->name[0] != '\0') {
-        usermode_notify_task_reaped(task->name);
-    }
+    aspace = task->address_space;
+    usermode_notify_task_reaped(task->pid);
     if (stack_base) {
         kfree(stack_base);
         kmalloc_get_stats(&stats);
@@ -193,9 +203,13 @@ static void sched_reap_task_locked(struct task *task) {
         KLOGI("SMOKE_LIFECYCLE_STACK_RECLAIM pid=%d live_large=%u",
               pid, (uint32_t)stats.large_bytes_used);
     }
+    if (aspace && aspace != paging_kernel_address_space()) {
+        paging_destroy_address_space(aspace);
+    }
     memset(task, 0, sizeof(*task));
     task->state = TASK_UNUSED;
     task->parent_pid = -1;
+    task->address_space = paging_kernel_address_space();
     proc_fd_table_init(&task->fd_table);
 }
 
@@ -259,6 +273,14 @@ static void sched_flush_deferred_stack_free_locked(void) {
           (uint32_t)stats.large_bytes_used);
     KLOGI("SMOKE_LIFECYCLE_STACK_DEFERRED live_large=%u",
           (uint32_t)stats.large_bytes_used);
+}
+
+static void sched_flush_deferred_as_free_locked(void) {
+    if (!g_deferred_as_free) {
+        return;
+    }
+    paging_destroy_address_space(g_deferred_as_free);
+    g_deferred_as_free = 0;
 }
 
 static int sched_range_ok(uint32_t addr, uint32_t len, uint32_t base, uint32_t size) {
@@ -347,6 +369,45 @@ static void sched_init_task_cwd(struct task *task) {
     task->user.cwd[1] = '\0';
 }
 
+static int sched_build_user_ranges(const struct task *task,
+                                   struct paging_user_range *ranges,
+                                   uint32_t *out_count) {
+    uint32_t count = 0U;
+
+    if (!task || !ranges || !out_count) {
+        return -KERR_INVAL;
+    }
+    *out_count = 0U;
+
+    if (task->user.image_size != 0U) {
+        ranges[count].base = task->user.image_base;
+        ranges[count].size = task->user.image_size;
+        count++;
+    }
+    if (task->user.stack_size != 0U) {
+        ranges[count].base = task->user.stack_base;
+        ranges[count].size = task->user.stack_size;
+        count++;
+    }
+    if (count == 0U) {
+        return -KERR_INVAL;
+    }
+
+    *out_count = count;
+    return 0;
+}
+
+static void sched_user_fork_child_entry(void *arg) {
+    struct task *self = g_current_task;
+
+    (void)arg;
+    if (!self || !self->user.fork_ctx_valid) {
+        KLOGW("sched: fork child entry missing context pid=%d", self ? self->pid : -1);
+        return;
+    }
+    enter_user_mode_full(&self->user.fork_ctx);
+}
+
 static struct task *sched_find_task_slot(void) {
     for (uint32_t i = 0; i < SCHED_MAX_TASKS; i++) {
         if (g_tasks[i].state == TASK_UNUSED) {
@@ -430,11 +491,13 @@ static void sched_switch_locked(struct task *next) {
     g_current_task = next;
     g_context_switches++;
     tss_set_kernel_stack((uint32_t)(uintptr_t)(next->stack_base + next->stack_size));
+    (void)paging_activate_address_space(next->address_space);
 
     save_slot = prev ? &prev->esp : &g_bootstrap_esp;
     sched_context_switch(save_slot, next->esp);
 
     sched_flush_deferred_stack_free_locked();
+    sched_flush_deferred_as_free_locked();
     g_in_scheduler = 0;
 }
 
@@ -511,6 +574,7 @@ void sched_init(void) {
     g_idle_ticks = 0;
     g_need_resched = 0;
     g_deferred_stack_free = 0;
+    g_deferred_as_free = 0;
 
     KLOGI("sched: init");
     if (sched_spawn_kernel_task("idle", sched_idle_task, 0, SCHED_DEFAULT_STACK) < 0) {
@@ -566,6 +630,7 @@ static int sched_spawn_task_internal(const char *name,
     task->arg = arg;
     task->timeslice_left = SCHED_DEFAULT_TIMESLICE;
     proc_fd_table_init(&task->fd_table);
+    task->address_space = paging_kernel_address_space();
     sched_init_task_cwd(task);
     if (parent_pid > 0 &&
         g_current_task &&
@@ -580,6 +645,7 @@ static int sched_spawn_task_internal(const char *name,
                 memset(task, 0, sizeof(*task));
                 task->state = TASK_UNUSED;
                 task->parent_pid = -1;
+                task->address_space = paging_kernel_address_space();
                 proc_fd_table_init(&task->fd_table);
                 return clone_rc;
             }
@@ -620,12 +686,145 @@ int sched_spawn_user_child_task(const char *name,
                                      out_pid);
 }
 
+int sched_fork_current_user_task(const struct sched_user_fork_context *ctx, int *out_pid) {
+    struct task *parent = g_current_task;
+    struct task *child;
+    struct paging_user_range ranges[2];
+    uint32_t range_count = 0U;
+    struct paging_address_space *child_as = 0;
+    uint8_t *stack = 0;
+    int rc;
+
+    if (!ctx || !out_pid) {
+        return -KERR_INVAL;
+    }
+    *out_pid = -1;
+
+    if (!parent || !sched_current_task_is_user()) {
+        return -KERR_NOTSUP;
+    }
+    rc = sched_build_user_ranges(parent, ranges, &range_count);
+    if (rc < 0) {
+        return rc;
+    }
+
+    if (!parent->address_space || parent->address_space == paging_kernel_address_space()) {
+        struct paging_address_space *parent_as = 0;
+
+        rc = paging_create_user_address_space(ranges, range_count, &parent_as);
+        if (rc < 0) {
+            return rc;
+        }
+        parent->address_space = parent_as;
+        (void)paging_activate_address_space(parent->address_space);
+    }
+
+    rc = paging_clone_address_space_cow(parent->address_space, ranges, range_count, &child_as);
+    if (rc < 0) {
+        KLOGW("sched: fork clone failed parent_pid=%d rc=%d",
+              parent ? parent->pid : -1,
+              rc);
+        return rc;
+    }
+
+    child = sched_find_task_slot();
+    if (!child) {
+        paging_destroy_address_space(child_as);
+        return -KERR_NOMEM;
+    }
+
+    stack = (uint8_t *)kmalloc(SCHED_DEFAULT_STACK);
+    if (!stack) {
+        paging_destroy_address_space(child_as);
+        return -KERR_NOMEM;
+    }
+
+    memset(child, 0, sizeof(*child));
+    memset(stack, 0, SCHED_DEFAULT_STACK);
+    child->pid = (int)g_next_pid++;
+    sched_copy_task_name(child->name, parent->name);
+    child->state = TASK_RUNNABLE;
+    child->exec_mode = TASK_EXEC_USER_BOOTSTRAP;
+    child->parent_pid = parent->pid;
+    child->wait_target_pid = 0;
+    child->stack_base = stack;
+    child->stack_size = SCHED_DEFAULT_STACK;
+    child->entry = sched_user_fork_child_entry;
+    child->arg = 0;
+    child->timeslice_left = SCHED_DEFAULT_TIMESLICE;
+    child->address_space = child_as;
+    proc_fd_table_init(&child->fd_table);
+    sched_init_task_cwd(child);
+
+    rc = proc_fd_table_clone(&child->fd_table, &parent->fd_table);
+    if (rc < 0) {
+        paging_destroy_address_space(child_as);
+        kfree(stack);
+        memset(child, 0, sizeof(*child));
+        child->state = TASK_UNUSED;
+        child->parent_pid = -1;
+        child->address_space = paging_kernel_address_space();
+        proc_fd_table_init(&child->fd_table);
+        return rc;
+    }
+
+    child->user.image_base = parent->user.image_base;
+    child->user.image_size = parent->user.image_size;
+    child->user.stack_base = parent->user.stack_base;
+    child->user.stack_size = parent->user.stack_size;
+    child->user.cmdline_len = parent->user.cmdline_len;
+    memcpy(child->user.cmdline, parent->user.cmdline, parent->user.cmdline_len + 1U);
+    child->user.cwd_len = parent->user.cwd_len;
+    memcpy(child->user.cwd, parent->user.cwd, parent->user.cwd_len + 1U);
+    child->user.entry_eip = ctx->eip;
+    child->user.entry_esp = ctx->esp;
+    child->user.last_user_eip = ctx->eip;
+    child->user.fork_ctx.eax = 0U;
+    child->user.fork_ctx.ebx = ctx->ebx;
+    child->user.fork_ctx.ecx = ctx->ecx;
+    child->user.fork_ctx.edx = ctx->edx;
+    child->user.fork_ctx.esi = ctx->esi;
+    child->user.fork_ctx.edi = ctx->edi;
+    child->user.fork_ctx.ebp = ctx->ebp;
+    child->user.fork_ctx.eip = ctx->eip;
+    child->user.fork_ctx.esp = ctx->esp;
+    child->user.fork_ctx.eflags = ctx->eflags;
+    child->user.fork_ctx_valid = 1;
+
+    sched_init_task_stack(child);
+    *out_pid = child->pid;
+    return 0;
+}
+
 int sched_mark_current_task_user_bootstrap(uint32_t user_eip, uint32_t user_esp) {
     struct task *task = g_current_task;
+    struct paging_user_range ranges[2];
+    uint32_t range_count = 0U;
+    struct paging_address_space *as = 0;
+    int rc;
 
     if (!task) {
         return -KERR_INVAL;
     }
+    rc = sched_build_user_ranges(task, ranges, &range_count);
+    if (rc < 0) {
+        KLOGW("sched: user bootstrap range build failed pid=%d rc=%d",
+              task->pid,
+              rc);
+        return rc;
+    }
+
+    if (!task->address_space || task->address_space == paging_kernel_address_space()) {
+        rc = paging_create_user_address_space(ranges, range_count, &as);
+        if (rc < 0) {
+            KLOGW("sched: user address-space create failed pid=%d rc=%d",
+                  task->pid,
+                  rc);
+            return rc;
+        }
+        task->address_space = as;
+    }
+    (void)paging_activate_address_space(task->address_space);
 
     task->exec_mode = TASK_EXEC_USER_BOOTSTRAP;
     task->user.entry_eip = user_eip;
@@ -1041,8 +1240,9 @@ int sched_current_process_fd_dup2(uint32_t oldfd, uint32_t newfd, struct kfile *
     return proc_fd_dup2(&g_current_task->fd_table, oldfd, newfd, out_file);
 }
 
-int sched_waitpid(int target_pid, int *out_waited_pid, int32_t *out_exit_code) {
+int sched_waitpid_ex(int target_pid, uint32_t options, int *out_waited_pid, int32_t *out_exit_code) {
     struct task *parent;
+    int nohang = (options & SYSCALL_WAITPID_FLAG_NOHANG) != 0U;
 
     if (!out_waited_pid) {
         return -KERR_INVAL;
@@ -1052,6 +1252,9 @@ int sched_waitpid(int target_pid, int *out_waited_pid, int32_t *out_exit_code) {
         *out_exit_code = 0;
     }
     if (!g_current_task || !sched_current_task_is_user()) {
+        return -KERR_NOTSUP;
+    }
+    if ((options & ~SYSCALL_WAITPID_FLAG_NOHANG) != 0U) {
         return -KERR_NOTSUP;
     }
     if (target_pid <= 0 && target_pid != SCHED_WAIT_ANY_CHILD) {
@@ -1093,6 +1296,15 @@ int sched_waitpid(int target_pid, int *out_waited_pid, int32_t *out_exit_code) {
             sched_sti();
             return -KERR_NOENT;
         }
+        if (nohang) {
+            parent->wait_target_pid = 0;
+            sched_sti();
+            *out_waited_pid = 0;
+            if (out_exit_code) {
+                *out_exit_code = 0;
+            }
+            return 0;
+        }
 
         parent->wait_target_pid = target_pid;
         parent->state = TASK_WAIT_CHILD;
@@ -1100,6 +1312,10 @@ int sched_waitpid(int target_pid, int *out_waited_pid, int32_t *out_exit_code) {
         sched_schedule_locked();
         sched_sti();
     }
+}
+
+int sched_waitpid(int target_pid, int *out_waited_pid, int32_t *out_exit_code) {
+    return sched_waitpid_ex(target_pid, 0U, out_waited_pid, out_exit_code);
 }
 
 void sched_start(void) {
@@ -1231,13 +1447,19 @@ static void sched_task_exit(void) {
             self->state = TASK_ZOMBIE;
             sched_maybe_wake_parent_waiter_locked(self->parent_pid, self->pid);
         } else {
-            if (self->name[0] != '\0') {
-                usermode_notify_task_reaped(self->name);
-            }
+            struct paging_address_space *as_to_free = self->address_space;
+
+            usermode_notify_task_reaped(self->pid);
             if (g_deferred_stack_free) {
                 sched_flush_deferred_stack_free_locked();
             }
+            if (g_deferred_as_free) {
+                sched_flush_deferred_as_free_locked();
+            }
             g_deferred_stack_free = self->stack_base;
+            if (as_to_free && as_to_free != paging_kernel_address_space()) {
+                g_deferred_as_free = as_to_free;
+            }
             self->state = TASK_UNUSED;
             self->pid = 0;
             self->exec_mode = TASK_EXEC_KERNEL;
@@ -1245,6 +1467,7 @@ static void sched_task_exit(void) {
             self->wait_target_pid = 0;
             self->stack_base = 0;
             self->stack_size = 0;
+            self->address_space = paging_kernel_address_space();
         }
     }
     sched_schedule_locked();

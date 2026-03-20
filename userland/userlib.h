@@ -104,6 +104,10 @@ static inline int32_t user_waitpid(int32_t pid, int32_t *status, uint32_t option
                          options);
 }
 
+static inline int32_t user_fork(void) {
+    return user_syscall0(SYS_FORK);
+}
+
 static inline int32_t user_getcmdline(char *buf, uint32_t buf_len) {
     return user_syscall2(SYS_GETCMDLINE, (uint32_t)(uintptr_t)buf, buf_len);
 }
@@ -138,6 +142,10 @@ static inline int32_t user_chdir(const char *path, uint32_t path_len) {
 
 static inline int32_t user_getcwd(char *buf, uint32_t buf_len) {
     return user_syscall2(SYS_GETCWD, (uint32_t)(uintptr_t)buf, buf_len);
+}
+
+static inline int32_t user_unlink(const char *path, uint32_t path_len) {
+    return user_syscall2(SYS_UNLINK, (uint32_t)(uintptr_t)path, path_len);
 }
 
 static inline void user_yield(void) {

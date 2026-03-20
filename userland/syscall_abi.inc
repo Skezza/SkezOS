@@ -20,6 +20,10 @@
 	.set SYS_PIPE, 18
 	.set SYS_DUP, 19
 	.set SYS_DUP2, 20
+	.set SYS_UNLINK, 21
+	.set SYS_FORK, 22
+
+	.set SYSCALL_WAITPID_FLAG_NOHANG, (1 << 0)
 
 	.set SYSCALL_FD_STDIN, 0
 	.set SYSCALL_FD_STDOUT, 1

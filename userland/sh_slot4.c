@@ -10,14 +10,19 @@
 #define SHELL_PROMPT_MAX 128U
 #define SHELL_PIPELINE_MAX 8U
 #define SHELL_STAGE_CMDLINE_MAX 96U
+/* Keep this below spawn-slot concurrency so overflow handling stays reachable in smoke tests. */
+#define SHELL_BG_JOB_MAX 1U
 #define SHELL_COMPLETION_MAX_MATCHES (SHELL_LS_MAX_ENTRIES + 8U)
 #define SHELL_HISTORY_MAX 8U
+#define SHELL_HISTORY_PERSIST_PATH "/persist/.sh_history"
 
 struct shell_stage {
     char cmd[SHELL_PATH_MAX];
     uint32_t cmd_len;
     char cmdline[SHELL_STAGE_CMDLINE_MAX];
     uint32_t cmdline_len;
+    char spawn_cmdline[SHELL_STAGE_CMDLINE_MAX];
+    uint32_t spawn_cmdline_len;
     char redir_in[SHELL_PATH_MAX];
     char redir_out[SHELL_PATH_MAX];
     char redir_err[SHELL_PATH_MAX];
@@ -28,6 +33,16 @@ struct shell_stage {
     uint32_t redir_err_append;
 };
 
+struct shell_bg_job {
+    uint32_t used;
+    uint32_t id;
+    uint32_t remaining;
+    int32_t pids[SHELL_PIPELINE_MAX];
+    int32_t last_pid;
+    int32_t last_status;
+    char cmd_preview[SHELL_LINE_MAX];
+};
+
 static char g_shell_line[SHELL_LINE_MAX];
 static char g_shell_path[SHELL_PATH_MAX];
 static char g_shell_cwd[SHELL_CWD_MAX] = "/";
@@ -35,26 +50,52 @@ static char g_shell_prompt[SHELL_PROMPT_MAX];
 static struct shell_stage g_shell_stages[SHELL_PIPELINE_MAX];
 static struct syscall_task_snapshot_entry g_shell_ps_tasks[SHELL_PS_MAX_TASKS];
 static struct syscall_dir_entry g_shell_ls_entries[SHELL_LS_MAX_ENTRIES];
+static struct shell_bg_job g_shell_bg_jobs[SHELL_BG_JOB_MAX];
 static char g_shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
 static uint32_t g_shell_history_count;
 static uint32_t g_shell_history_head;
+static uint32_t g_shell_history_persist_muted;
+static uint32_t g_shell_history_run_depth;
+static uint32_t g_shell_bg_next_id = 1U;
 
 static const char kBanner[] = "SkezOS shell ready\nType 'help' for commands.\n";
 static const char kHelp[] =
-    "builtins: help history ps ls pwd cd wait exit\n"
-    "run: <name> -> /bin/<name>.elf, ./tool uses cwd\n"
-    "edit: BS deletes, Esc/Ctrl+P history, Ctrl+N forward, Tab completes commands\n";
+    "builtins: help history [clear|run N] ps ls pwd cd wait exit\n"
+    "run: <name> -> /bin/<name>.elf, ./tool uses cwd, pipeline/redir supported, suffix '&' for background\n"
+    "wait: blocks until tracked background pipelines complete\n"
+    "hist: !!/!N/!-N/!prefix/!?term/^old^new^ recalls history\n"
+    "edit: BS deletes, Ctrl+W word, Ctrl+U line, Esc/Ctrl+P history, Ctrl+N forward, Tab completes commands, Ctrl+R search\n";
 static const char kCdFail[] = "cd: chdir failed\n";
 static const char kLsFail[] = "ls: list failed\n";
 static const char kPwdFail[] = "pwd: getcwd failed\n";
 static const char kWaitStub[] = "wait: no background jobs\n";
+static const char kWaitDone[] = "wait: done\n";
 static const char kPsFail[] = "ps: snapshot failed\n";
 static const char kHistoryEmpty[] = "history: empty\n";
+static const char kHistoryCleared[] = "history: cleared\n";
+static const char kHistoryUsage[] = "history: usage: history [clear|run N]\n";
+static const char kHistoryRunDepthExceeded[] = "history: run depth exceeded\n";
+static const char kHistoryRunPrefix[] = "history: run ";
+static const char kHistorySearchPrefix[] = "search: ";
+static const char kHistorySearchArrow[] = " -> ";
+static const char kHistorySearchAny[] = "*";
+static const char kHistorySearchNoMatch[] = "(no-match)";
+static const char kHistoryEventNotFound[] = "history: event not found\n";
+static const char kHistorySubstFailed[] = "history: substitution failed\n";
+static const char kHistoryEventPrefix[] = "history: ";
+static const char kHistoryEventArrow[] = " -> ";
 static const char kSpawnFail[] = "run: launch failed\n";
 static const char kWaitFail[] = "run: waitpid failed\n";
 static const char kParseFail[] = "run: parse failed\n";
 static const char kBuiltinPipeRedirect[] = "run: builtin does not support pipes/redirection\n";
 static const char kRedirectOpenFail[] = "run: redirect open failed\n";
+static const char kBgStartPrefix[] = "bg: started job=";
+static const char kBgDonePrefix[] = "bg: done job=";
+static const char kBgPidPrefix[] = " pid=";
+static const char kBgStatusPrefix[] = " status=";
+static const char kBgCmdPrefix[] = " cmd=";
+static const char kBgOverflowPrefix[] = "bg: overflow cmd=";
+static const char kBgTrackFail[] = "run: background tracking failed\n";
 static const char kExit[] = "sh: exit\n";
 static const char kNewline[] = "\n";
 static const char kEraseOne[] = "\b \b";
@@ -71,7 +112,31 @@ static const char *kShellCompletionBuiltins[] = {
 };
 
 static uint32_t shell_skip_spaces(const char *s, uint32_t idx);
+static int shell_is_meta_char(char ch);
+static int shell_should_escape_spawn_char(char ch);
+static int shell_append_escaped_arg(char *dst,
+                                    uint32_t *len_io,
+                                    uint32_t cap,
+                                    const char *arg,
+                                    uint32_t arg_len);
 static int shell_str_contains_char_n(const char *s, uint32_t len, char ch);
+static int shell_history_handle_command(const char *args, uint32_t args_len);
+static int shell_dispatch_line(char *line);
+static void shell_reap_background_jobs_nonblocking(void);
+static void shell_drain_background_jobs(void);
+static int shell_history_search(const char *query,
+                                uint32_t query_len,
+                                uint32_t start_offset,
+                                const char **out_line,
+                                uint32_t *out_len,
+                                uint32_t *out_offset);
+static int shell_history_find_match_from_offset(const char *prefix,
+                                                uint32_t prefix_len,
+                                                uint32_t start_offset,
+                                                int newer_direction,
+                                                const char **out_line,
+                                                uint32_t *out_len,
+                                                uint32_t *out_offset);
 
 static void shell_write_all(const char *buf, uint32_t len) {
     while (len > 0U) {
@@ -317,6 +382,17 @@ static void shell_run_history(void) {
     }
 }
 
+static void shell_write_fd_all(uint32_t fd, const char *buf, uint32_t len) {
+    while (len > 0U) {
+        int32_t rc = user_write(fd, buf, len);
+        if (rc <= 0) {
+            return;
+        }
+        buf += (uint32_t)rc;
+        len -= (uint32_t)rc;
+    }
+}
+
 static int32_t shell_read_char_blocking(void) {
     char ch;
     int32_t rc = user_read(USER_FD_STDIN, &ch, 1U);
@@ -346,7 +422,53 @@ static int shell_history_get(uint32_t offset,
     return 0;
 }
 
-static void shell_history_push(const char *line, uint32_t len) {
+static int shell_history_get_by_index(uint32_t display_index,
+                                      const char **out_line,
+                                      uint32_t *out_len) {
+    uint32_t oldest;
+    uint32_t idx;
+
+    if (!out_line || !out_len || display_index == 0U || display_index > g_shell_history_count) {
+        return -1;
+    }
+    oldest = (g_shell_history_head + SHELL_HISTORY_MAX - g_shell_history_count) % SHELL_HISTORY_MAX;
+    idx = (oldest + (display_index - 1U)) % SHELL_HISTORY_MAX;
+    *out_line = g_shell_history[idx];
+    *out_len = user_strlen(g_shell_history[idx]);
+    return 0;
+}
+
+static void shell_history_persist_flush(void) {
+    uint32_t oldest;
+    int32_t fd;
+
+    if (g_shell_history_persist_muted != 0U) {
+        return;
+    }
+
+    fd = user_open(SHELL_HISTORY_PERSIST_PATH,
+                   (uint32_t)(sizeof(SHELL_HISTORY_PERSIST_PATH) - 1U),
+                   SYSCALL_OPEN_FLAG_WRITE |
+                       SYSCALL_OPEN_FLAG_CREATE |
+                       SYSCALL_OPEN_FLAG_TRUNC);
+    if (fd < 0) {
+        return;
+    }
+
+    oldest = (g_shell_history_head + SHELL_HISTORY_MAX - g_shell_history_count) % SHELL_HISTORY_MAX;
+    for (uint32_t i = 0U; i < g_shell_history_count; i++) {
+        uint32_t idx = (oldest + i) % SHELL_HISTORY_MAX;
+        uint32_t len = user_strlen(g_shell_history[idx]);
+
+        if (len != 0U) {
+            shell_write_fd_all((uint32_t)fd, g_shell_history[idx], len);
+        }
+        shell_write_fd_all((uint32_t)fd, "\n", 1U);
+    }
+    (void)user_close((uint32_t)fd);
+}
+
+static void shell_history_push_internal(const char *line, uint32_t len, int persist) {
     uint32_t slot;
 
     if (!line || len == 0U) {
@@ -378,6 +500,246 @@ static void shell_history_push(const char *line, uint32_t len) {
     if (g_shell_history_count < SHELL_HISTORY_MAX) {
         g_shell_history_count++;
     }
+    if (persist != 0) {
+        shell_history_persist_flush();
+    }
+}
+
+static void shell_history_push(const char *line, uint32_t len) {
+    shell_history_push_internal(line, len, 1);
+}
+
+static void shell_history_load_persisted(void) {
+    char chunk[64];
+    char line[SHELL_LINE_MAX];
+    uint32_t line_len = 0U;
+    uint32_t line_overflow = 0U;
+    int32_t fd;
+
+    fd = user_open(SHELL_HISTORY_PERSIST_PATH,
+                   (uint32_t)(sizeof(SHELL_HISTORY_PERSIST_PATH) - 1U),
+                   0U);
+    if (fd < 0) {
+        return;
+    }
+
+    g_shell_history_persist_muted = 1U;
+    for (;;) {
+        int32_t rc = user_read((uint32_t)fd, chunk, (uint32_t)sizeof(chunk));
+        if (rc <= 0) {
+            break;
+        }
+
+        for (uint32_t i = 0U; i < (uint32_t)rc; i++) {
+            char ch = chunk[i];
+
+            if (ch == '\r') {
+                continue;
+            }
+            if (ch == '\n') {
+                if (line_len != 0U) {
+                    shell_history_push_internal(line, line_len, 0);
+                }
+                line_len = 0U;
+                line_overflow = 0U;
+                continue;
+            }
+            if (line_overflow != 0U) {
+                continue;
+            }
+            if (line_len + 1U < SHELL_LINE_MAX) {
+                line[line_len++] = ch;
+            } else {
+                line_overflow = 1U;
+            }
+        }
+    }
+
+    if (line_len != 0U) {
+        shell_history_push_internal(line, line_len, 0);
+    }
+    g_shell_history_persist_muted = 0U;
+    (void)user_close((uint32_t)fd);
+}
+
+static void shell_history_clear(void) {
+    g_shell_history_count = 0U;
+    g_shell_history_head = 0U;
+    shell_history_persist_flush();
+}
+
+static int shell_history_line_contains(const char *line,
+                                       uint32_t line_len,
+                                       const char *needle,
+                                       uint32_t needle_len) {
+    if (!line || !needle || needle_len > line_len) {
+        return 0;
+    }
+    if (needle_len == 0U) {
+        return 1;
+    }
+    for (uint32_t i = 0U; i + needle_len <= line_len; i++) {
+        uint32_t j = 0U;
+        while (j < needle_len && line[i + j] == needle[j]) {
+            j++;
+        }
+        if (j == needle_len) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int shell_history_line_starts_with(const char *line,
+                                          uint32_t line_len,
+                                          const char *prefix,
+                                          uint32_t prefix_len) {
+    if (!line || !prefix || prefix_len > line_len) {
+        return 0;
+    }
+    for (uint32_t i = 0U; i < prefix_len; i++) {
+        if (line[i] != prefix[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int shell_history_find_prefix(const char *prefix,
+                                     uint32_t prefix_len,
+                                     const char **out_line,
+                                     uint32_t *out_len) {
+    if (!prefix || prefix_len == 0U || !out_line || !out_len) {
+        return -1;
+    }
+    for (uint32_t offset = 0U; offset < g_shell_history_count; offset++) {
+        const char *line = 0;
+        uint32_t line_len = 0U;
+
+        if (shell_history_get(offset, &line, &line_len) < 0) {
+            continue;
+        }
+        if (!shell_history_line_starts_with(line, line_len, prefix, prefix_len)) {
+            continue;
+        }
+        *out_line = line;
+        *out_len = line_len;
+        return 0;
+    }
+    return -1;
+}
+
+static int shell_history_find_match_from_offset(const char *prefix,
+                                                uint32_t prefix_len,
+                                                uint32_t start_offset,
+                                                int newer_direction,
+                                                const char **out_line,
+                                                uint32_t *out_len,
+                                                uint32_t *out_offset) {
+    if (!out_line || !out_len || !out_offset || start_offset >= g_shell_history_count) {
+        return -1;
+    }
+
+    if (newer_direction != 0) {
+        uint32_t offset = start_offset;
+        for (;;) {
+            const char *line = 0;
+            uint32_t line_len = 0U;
+
+            if (shell_history_get(offset, &line, &line_len) == 0 &&
+                (prefix_len == 0U || shell_history_line_starts_with(line, line_len, prefix, prefix_len))) {
+                *out_line = line;
+                *out_len = line_len;
+                *out_offset = offset;
+                return 0;
+            }
+            if (offset == 0U) {
+                break;
+            }
+            offset--;
+        }
+        return -1;
+    }
+
+    for (uint32_t offset = start_offset; offset < g_shell_history_count; offset++) {
+        const char *line = 0;
+        uint32_t line_len = 0U;
+
+        if (shell_history_get(offset, &line, &line_len) < 0) {
+            continue;
+        }
+        if (prefix_len != 0U &&
+            !shell_history_line_starts_with(line, line_len, prefix, prefix_len)) {
+            continue;
+        }
+        *out_line = line;
+        *out_len = line_len;
+        *out_offset = offset;
+        return 0;
+    }
+    return -1;
+}
+
+static int shell_history_search(const char *query,
+                                uint32_t query_len,
+                                uint32_t start_offset,
+                                const char **out_line,
+                                uint32_t *out_len,
+                                uint32_t *out_offset) {
+    uint32_t count = g_shell_history_count;
+
+    if (count == 0U || !out_line || !out_len || !out_offset) {
+        return -1;
+    }
+    if (query_len != 0U && !query) {
+        return -1;
+    }
+    if (start_offset >= count) {
+        start_offset = 0U;
+    }
+
+    for (uint32_t pass = 0U; pass < 2U; pass++) {
+        uint32_t begin = pass == 0U ? start_offset : 0U;
+        uint32_t end = pass == 0U ? count : start_offset;
+
+        for (uint32_t offset = begin; offset < end; offset++) {
+            const char *line = 0;
+            uint32_t line_len = 0U;
+
+            if (shell_history_get(offset, &line, &line_len) < 0) {
+                continue;
+            }
+            if (!shell_history_line_contains(line, line_len, query, query_len)) {
+                continue;
+            }
+            *out_line = line;
+            *out_len = line_len;
+            *out_offset = offset;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int shell_find_substring(const char *line,
+                                uint32_t line_len,
+                                const char *needle,
+                                uint32_t needle_len,
+                                uint32_t *out_index) {
+    if (!line || !needle || !out_index || needle_len == 0U || needle_len > line_len) {
+        return -1;
+    }
+    for (uint32_t i = 0U; i + needle_len <= line_len; i++) {
+        uint32_t j = 0U;
+        while (j < needle_len && line[i + j] == needle[j]) {
+            j++;
+        }
+        if (j == needle_len) {
+            *out_index = i;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 static int shell_prefix_match(const char *candidate,
@@ -580,6 +942,12 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
     uint32_t len = 0;
     uint32_t history_browse_active = 0U;
     uint32_t history_offset = 0U;
+    char history_browse_query[SHELL_LINE_MAX];
+    uint32_t history_browse_query_len = 0U;
+    uint32_t history_search_active = 0U;
+    uint32_t history_search_next_offset = 0U;
+    char history_search_query[SHELL_LINE_MAX];
+    uint32_t history_search_query_len = 0U;
 
     if (!buf || cap == 0U) {
         return -1;
@@ -593,20 +961,108 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
         if (ch == '\r') {
             ch = '\n';
         }
+        if (ch == 0x12) {
+            const char *match_line = 0;
+            uint32_t match_len = 0U;
+            uint32_t match_offset = 0U;
+
+            if (g_shell_history_count == 0U) {
+                continue;
+            }
+            if (history_search_active == 0U) {
+                history_search_query_len = len;
+                if (history_search_query_len + 1U > sizeof(history_search_query)) {
+                    history_search_query_len = (uint32_t)sizeof(history_search_query) - 1U;
+                }
+                if (history_search_query_len != 0U) {
+                    user_memcpy(history_search_query, buf, history_search_query_len);
+                }
+                history_search_query[history_search_query_len] = '\0';
+                history_search_next_offset = 0U;
+                history_search_active = 1U;
+            }
+
+            if (shell_history_search(history_search_query,
+                                     history_search_query_len,
+                                     history_search_next_offset,
+                                     &match_line,
+                                     &match_len,
+                                     &match_offset) == 0) {
+                shell_replace_line(buf, &len, cap, match_line, match_len);
+                history_search_next_offset = match_offset + 1U;
+                if (history_search_next_offset >= g_shell_history_count) {
+                    history_search_next_offset = 0U;
+                }
+                history_browse_active = 0U;
+                shell_write_str(kNewline);
+                shell_write_str(kHistorySearchPrefix);
+                if (history_search_query_len == 0U) {
+                    shell_write_str(kHistorySearchAny);
+                } else {
+                    shell_write_all(history_search_query, history_search_query_len);
+                }
+                shell_write_str(kHistorySearchArrow);
+                shell_write_all(match_line, match_len);
+                shell_write_str(kNewline);
+                shell_write_str(shell_build_prompt());
+                if (len != 0U) {
+                    shell_write_all(buf, len);
+                }
+            } else {
+                history_search_active = 0U;
+                history_search_next_offset = 0U;
+                history_search_query_len = 0U;
+                shell_write_str(kNewline);
+                shell_write_str(kHistorySearchPrefix);
+                shell_write_str(kHistorySearchNoMatch);
+                shell_write_str(kNewline);
+                shell_write_str(shell_build_prompt());
+                if (len != 0U) {
+                    shell_write_all(buf, len);
+                }
+            }
+            continue;
+        }
+        if (history_search_active != 0U) {
+            history_search_active = 0U;
+            history_search_next_offset = 0U;
+            history_search_query_len = 0U;
+        }
         if (ch == 27 || ch == 0x10) {
             const char *history_line = 0;
             uint32_t history_len = 0U;
+            uint32_t match_offset = 0U;
+            uint32_t search_start = 0U;
 
             if (g_shell_history_count == 0U) {
                 continue;
             }
             if (history_browse_active == 0U) {
+                history_browse_query_len = len;
+                if (history_browse_query_len + 1U > sizeof(history_browse_query)) {
+                    history_browse_query_len = (uint32_t)sizeof(history_browse_query) - 1U;
+                }
+                if (history_browse_query_len != 0U) {
+                    user_memcpy(history_browse_query, buf, history_browse_query_len);
+                }
+                history_browse_query[history_browse_query_len] = '\0';
                 history_browse_active = 1U;
-                history_offset = 0U;
-            } else if (history_offset + 1U < g_shell_history_count) {
-                history_offset++;
+                search_start = 0U;
+            } else {
+                search_start = history_offset + 1U;
+                if (search_start >= g_shell_history_count) {
+                    continue;
+                }
             }
-            if (shell_history_get(history_offset, &history_line, &history_len) == 0) {
+
+            if (shell_history_find_match_from_offset(history_browse_query,
+                                                     history_browse_query_len,
+                                                     search_start,
+                                                     0,
+                                                     &history_line,
+                                                     &history_len,
+                                                     &match_offset) == 0) {
+                history_offset = match_offset;
                 shell_replace_line(buf, &len, cap, history_line, history_len);
             }
             continue;
@@ -614,18 +1070,29 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
         if (ch == 0x0e) {
             const char *history_line = 0;
             uint32_t history_len = 0U;
+            uint32_t match_offset = 0U;
 
             if (history_browse_active == 0U) {
                 continue;
             }
-            if (history_offset > 0U) {
-                history_offset--;
-                if (shell_history_get(history_offset, &history_line, &history_len) == 0) {
-                    shell_replace_line(buf, &len, cap, history_line, history_len);
-                }
+            if (history_offset == 0U) {
+                history_browse_active = 0U;
+                shell_replace_line(buf, &len, cap, history_browse_query, history_browse_query_len);
+                continue;
+            }
+
+            if (shell_history_find_match_from_offset(history_browse_query,
+                                                     history_browse_query_len,
+                                                     history_offset - 1U,
+                                                     1,
+                                                     &history_line,
+                                                     &history_len,
+                                                     &match_offset) == 0) {
+                history_offset = match_offset;
+                shell_replace_line(buf, &len, cap, history_line, history_len);
             } else {
                 history_browse_active = 0U;
-                shell_replace_line(buf, &len, cap, 0, 0U);
+                shell_replace_line(buf, &len, cap, history_browse_query, history_browse_query_len);
             }
             continue;
         }
@@ -635,6 +1102,26 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
                 continue;
             }
             ch = ' ';
+        }
+        if (ch == 0x17) {
+            history_browse_active = 0U;
+            while (len > 0U && user_is_space(buf[len - 1U])) {
+                len--;
+                shell_erase_one_char();
+            }
+            while (len > 0U && !user_is_space(buf[len - 1U])) {
+                len--;
+                shell_erase_one_char();
+            }
+            continue;
+        }
+        if (ch == 0x15) {
+            history_browse_active = 0U;
+            while (len > 0U) {
+                len--;
+                shell_erase_one_char();
+            }
+            continue;
         }
         if (ch == '\b' || ch == 0x7f) {
             history_browse_active = 0U;
@@ -650,9 +1137,6 @@ static int32_t shell_read_line(char *buf, uint32_t cap) {
         if (ch == '\n') {
             shell_write_str(kNewline);
             buf[len] = '\0';
-            if (len != 0U) {
-                shell_history_push(buf, len);
-            }
             return (int32_t)len;
         }
         if (len + 1U >= cap) {
@@ -687,6 +1171,14 @@ static int shell_str_contains_char_n(const char *s, uint32_t len, char ch) {
     return 0;
 }
 
+static int shell_is_meta_char(char ch) {
+    return ch == '|' || ch == '<' || ch == '>' || ch == '&';
+}
+
+static int shell_should_escape_spawn_char(char ch) {
+    return user_is_space(ch) || ch == '\\' || ch == '\'' || ch == '"' || shell_is_meta_char(ch);
+}
+
 enum shell_token_kind {
     SHELL_TOK_NONE = 0,
     SHELL_TOK_WORD = 1,
@@ -696,6 +1188,8 @@ enum shell_token_kind {
     SHELL_TOK_REDIR_OUT_APPEND = 5,
     SHELL_TOK_REDIR_ERR = 6,
     SHELL_TOK_REDIR_ERR_APPEND = 7,
+    SHELL_TOK_AMP = 8,
+    SHELL_TOK_INVALID = 255,
 };
 
 static int shell_copy_token(char *dst, uint32_t dst_cap, const char *src, uint32_t src_len) {
@@ -709,75 +1203,170 @@ static int shell_copy_token(char *dst, uint32_t dst_cap, const char *src, uint32
     return 0;
 }
 
+static int shell_append_escaped_arg(char *dst,
+                                    uint32_t *len_io,
+                                    uint32_t cap,
+                                    const char *arg,
+                                    uint32_t arg_len) {
+    uint32_t len;
+
+    if (!dst || !len_io || cap == 0U || (!arg && arg_len != 0U)) {
+        return -1;
+    }
+    len = *len_io;
+    if (len >= cap) {
+        return -1;
+    }
+    if (len != 0U) {
+        if (len + 1U >= cap) {
+            return -1;
+        }
+        dst[len++] = ' ';
+    }
+    if (arg_len == 0U) {
+        if (len + 2U >= cap) {
+            return -1;
+        }
+        dst[len++] = '"';
+        dst[len++] = '"';
+        dst[len] = '\0';
+        *len_io = len;
+        return 0;
+    }
+    for (uint32_t i = 0U; i < arg_len; i++) {
+        char ch = arg[i];
+        if (shell_should_escape_spawn_char(ch)) {
+            if (len + 2U >= cap) {
+                return -1;
+            }
+            dst[len++] = '\\';
+            dst[len++] = ch;
+        } else {
+            if (len + 1U >= cap) {
+                return -1;
+            }
+            dst[len++] = ch;
+        }
+    }
+    dst[len] = '\0';
+    *len_io = len;
+    return 0;
+}
+
 static enum shell_token_kind shell_next_token(const char *line,
                                               uint32_t *io_idx,
-                                              const char **out_ptr,
+                                              char *out_buf,
+                                              uint32_t out_cap,
                                               uint32_t *out_len) {
     uint32_t idx;
-    uint32_t start;
+    uint32_t tok_len = 0U;
+    int in_single = 0;
+    int in_double = 0;
+    int saw_token = 0;
 
-    if (!line || !io_idx || !out_ptr || !out_len) {
-        return SHELL_TOK_NONE;
+    if (!line || !io_idx || !out_buf || out_cap == 0U || !out_len) {
+        return SHELL_TOK_INVALID;
     }
     idx = shell_skip_spaces(line, *io_idx);
     if (line[idx] == '\0') {
         *io_idx = idx;
-        *out_ptr = 0;
+        out_buf[0] = '\0';
         *out_len = 0U;
         return SHELL_TOK_NONE;
     }
 
     if (line[idx] == '|') {
         *io_idx = idx + 1U;
-        *out_ptr = line + idx;
-        *out_len = 1U;
+        out_buf[0] = '\0';
+        *out_len = 0U;
         return SHELL_TOK_PIPE;
+    }
+    if (line[idx] == '&') {
+        *io_idx = idx + 1U;
+        out_buf[0] = '\0';
+        *out_len = 0U;
+        return SHELL_TOK_AMP;
     }
     if (line[idx] == '<') {
         *io_idx = idx + 1U;
-        *out_ptr = line + idx;
-        *out_len = 1U;
+        out_buf[0] = '\0';
+        *out_len = 0U;
         return SHELL_TOK_REDIR_IN;
     }
     if (line[idx] == '>') {
         if (line[idx + 1U] == '>') {
             *io_idx = idx + 2U;
-            *out_ptr = line + idx;
-            *out_len = 2U;
+            out_buf[0] = '\0';
+            *out_len = 0U;
             return SHELL_TOK_REDIR_OUT_APPEND;
         }
         *io_idx = idx + 1U;
-        *out_ptr = line + idx;
-        *out_len = 1U;
+        out_buf[0] = '\0';
+        *out_len = 0U;
         return SHELL_TOK_REDIR_OUT;
     }
     if (line[idx] == '2' && line[idx + 1U] == '>') {
         if (line[idx + 2U] == '>') {
             *io_idx = idx + 3U;
-            *out_ptr = line + idx;
-            *out_len = 3U;
+            out_buf[0] = '\0';
+            *out_len = 0U;
             return SHELL_TOK_REDIR_ERR_APPEND;
         }
         *io_idx = idx + 2U;
-        *out_ptr = line + idx;
-        *out_len = 2U;
+        out_buf[0] = '\0';
+        *out_len = 0U;
         return SHELL_TOK_REDIR_ERR;
     }
 
-    start = idx;
-    while (line[idx] != '\0' && !user_is_space(line[idx])) {
-        if (line[idx] == '|' || line[idx] == '<' || line[idx] == '>') {
-            break;
+    while (line[idx] != '\0') {
+        char ch = line[idx];
+
+        if (!in_single && ch == '\\') {
+            idx++;
+            if (line[idx] == '\0') {
+                return SHELL_TOK_INVALID;
+            }
+            if (tok_len + 1U >= out_cap) {
+                return SHELL_TOK_INVALID;
+            }
+            out_buf[tok_len++] = line[idx++];
+            saw_token = 1;
+            continue;
         }
-        if (line[idx] == '2' && line[idx + 1U] == '>') {
-            break;
+        if (!in_double && ch == '\'') {
+            in_single = !in_single;
+            idx++;
+            saw_token = 1;
+            continue;
         }
+        if (!in_single && ch == '"') {
+            in_double = !in_double;
+            idx++;
+            saw_token = 1;
+            continue;
+        }
+        if (!in_single && !in_double) {
+            if (user_is_space(ch) || ch == '|' || ch == '&' || ch == '<' || ch == '>') {
+                break;
+            }
+            if (ch == '2' && line[idx + 1U] == '>') {
+                break;
+            }
+        }
+        if (tok_len + 1U >= out_cap) {
+            return SHELL_TOK_INVALID;
+        }
+        out_buf[tok_len++] = ch;
         idx++;
+        saw_token = 1;
     }
 
+    if (in_single || in_double || !saw_token) {
+        return SHELL_TOK_INVALID;
+    }
+    out_buf[tok_len] = '\0';
     *io_idx = idx;
-    *out_ptr = line + start;
-    *out_len = idx - start;
+    *out_len = tok_len;
     return SHELL_TOK_WORD;
 }
 
@@ -913,28 +1502,9 @@ static int shell_spawn_external(const char *cmd,
     return 0;
 }
 
-static void shell_run_external_simple(const char *cmd,
-                                      uint32_t cmd_len,
-                                      const char *cmdline,
-                                      uint32_t cmdline_len) {
-    int32_t pid = -1;
-    int32_t status = 0;
-
-    if (shell_spawn_external(cmd, cmd_len, cmdline, cmdline_len, &pid) < 0) {
-        shell_write_str(kSpawnFail);
-        return;
-    }
-    if (user_waitpid(pid, &status, 0U) < 0) {
-        shell_write_str(kWaitFail);
-    }
-}
-
 static int shell_stage_append_arg(struct shell_stage *stage, const char *arg, uint32_t arg_len) {
     if (!stage || !arg) {
         return -1;
-    }
-    if (arg_len == 0U) {
-        return 0;
     }
     if (stage->cmdline_len != 0U) {
         if (stage->cmdline_len + 1U >= sizeof(stage->cmdline)) {
@@ -948,6 +1518,13 @@ static int shell_stage_append_arg(struct shell_stage *stage, const char *arg, ui
     user_memcpy(stage->cmdline + stage->cmdline_len, arg, arg_len);
     stage->cmdline_len += arg_len;
     stage->cmdline[stage->cmdline_len] = '\0';
+    if (shell_append_escaped_arg(stage->spawn_cmdline,
+                                 &stage->spawn_cmdline_len,
+                                 sizeof(stage->spawn_cmdline),
+                                 arg,
+                                 arg_len) < 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -955,19 +1532,21 @@ static int shell_parse_stages(char *line,
                               struct shell_stage *stages,
                               uint32_t stage_cap,
                               uint32_t *out_stage_count,
-                              int *out_has_meta) {
+                              int *out_has_meta,
+                              uint32_t *out_background) {
     uint32_t idx = 0U;
     uint32_t stage_idx = 0U;
     struct shell_stage *stage;
-    const char *tok_ptr = 0;
+    char tok_buf[SHELL_LINE_MAX];
     uint32_t tok_len = 0U;
     enum shell_token_kind tok_kind;
 
-    if (!line || !stages || stage_cap == 0U || !out_stage_count || !out_has_meta) {
+    if (!line || !stages || stage_cap == 0U || !out_stage_count || !out_has_meta || !out_background) {
         return -1;
     }
     *out_stage_count = 0U;
     *out_has_meta = 0;
+    *out_background = 0U;
     if (line[0] == '\0') {
         return 0;
     }
@@ -979,6 +1558,8 @@ static int shell_parse_stages(char *line,
         stages[i].cmd_len = 0U;
         stages[i].cmdline[0] = '\0';
         stages[i].cmdline_len = 0U;
+        stages[i].spawn_cmdline[0] = '\0';
+        stages[i].spawn_cmdline_len = 0U;
         stages[i].redir_in[0] = '\0';
         stages[i].redir_out[0] = '\0';
         stages[i].redir_err[0] = '\0';
@@ -991,13 +1572,16 @@ static int shell_parse_stages(char *line,
 
     stage = &stages[stage_idx];
     for (;;) {
-        tok_kind = shell_next_token(line, &idx, &tok_ptr, &tok_len);
+        tok_kind = shell_next_token(line, &idx, tok_buf, sizeof(tok_buf), &tok_len);
+        if (tok_kind == SHELL_TOK_INVALID) {
+            return -1;
+        }
         if (tok_kind == SHELL_TOK_NONE) {
             break;
         }
         if (tok_kind == SHELL_TOK_PIPE) {
             *out_has_meta = 1;
-            if (stage->cmd_len == 0U) {
+            if (*out_background != 0U || stage->cmd_len == 0U) {
                 return -1;
             }
             stage_idx++;
@@ -1007,26 +1591,36 @@ static int shell_parse_stages(char *line,
             stage = &stages[stage_idx];
             continue;
         }
+        if (tok_kind == SHELL_TOK_AMP) {
+            *out_has_meta = 1;
+            if (*out_background != 0U || stage->cmd_len == 0U) {
+                return -1;
+            }
+            *out_background = 1U;
+            tok_kind = shell_next_token(line, &idx, tok_buf, sizeof(tok_buf), &tok_len);
+            if (tok_kind != SHELL_TOK_NONE) {
+                return -1;
+            }
+            break;
+        }
         if (tok_kind == SHELL_TOK_REDIR_IN) {
-            const char *path_ptr = 0;
             uint32_t path_len = 0U;
 
             *out_has_meta = 1;
             if (stage->has_redir_in) {
                 return -1;
             }
-            tok_kind = shell_next_token(line, &idx, &path_ptr, &path_len);
+            tok_kind = shell_next_token(line, &idx, tok_buf, sizeof(tok_buf), &path_len);
             if (tok_kind != SHELL_TOK_WORD || path_len == 0U) {
                 return -1;
             }
-            if (shell_copy_token(stage->redir_in, sizeof(stage->redir_in), path_ptr, path_len) < 0) {
+            if (shell_copy_token(stage->redir_in, sizeof(stage->redir_in), tok_buf, path_len) < 0) {
                 return -1;
             }
             stage->has_redir_in = 1U;
             continue;
         }
         if (tok_kind == SHELL_TOK_REDIR_OUT || tok_kind == SHELL_TOK_REDIR_OUT_APPEND) {
-            const char *path_ptr = 0;
             uint32_t path_len = 0U;
             enum shell_token_kind redir_kind = tok_kind;
 
@@ -1034,11 +1628,11 @@ static int shell_parse_stages(char *line,
             if (stage->has_redir_out) {
                 return -1;
             }
-            tok_kind = shell_next_token(line, &idx, &path_ptr, &path_len);
+            tok_kind = shell_next_token(line, &idx, tok_buf, sizeof(tok_buf), &path_len);
             if (tok_kind != SHELL_TOK_WORD || path_len == 0U) {
                 return -1;
             }
-            if (shell_copy_token(stage->redir_out, sizeof(stage->redir_out), path_ptr, path_len) < 0) {
+            if (shell_copy_token(stage->redir_out, sizeof(stage->redir_out), tok_buf, path_len) < 0) {
                 return -1;
             }
             stage->has_redir_out = 1U;
@@ -1046,7 +1640,6 @@ static int shell_parse_stages(char *line,
             continue;
         }
         if (tok_kind == SHELL_TOK_REDIR_ERR || tok_kind == SHELL_TOK_REDIR_ERR_APPEND) {
-            const char *path_ptr = 0;
             uint32_t path_len = 0U;
             enum shell_token_kind redir_kind = tok_kind;
 
@@ -1054,11 +1647,11 @@ static int shell_parse_stages(char *line,
             if (stage->has_redir_err) {
                 return -1;
             }
-            tok_kind = shell_next_token(line, &idx, &path_ptr, &path_len);
+            tok_kind = shell_next_token(line, &idx, tok_buf, sizeof(tok_buf), &path_len);
             if (tok_kind != SHELL_TOK_WORD || path_len == 0U) {
                 return -1;
             }
-            if (shell_copy_token(stage->redir_err, sizeof(stage->redir_err), path_ptr, path_len) < 0) {
+            if (shell_copy_token(stage->redir_err, sizeof(stage->redir_err), tok_buf, path_len) < 0) {
                 return -1;
             }
             stage->has_redir_err = 1U;
@@ -1070,13 +1663,13 @@ static int shell_parse_stages(char *line,
         }
 
         if (stage->cmd_len == 0U) {
-            if (shell_copy_token(stage->cmd, sizeof(stage->cmd), tok_ptr, tok_len) < 0) {
+            if (shell_copy_token(stage->cmd, sizeof(stage->cmd), tok_buf, tok_len) < 0) {
                 return -1;
             }
             stage->cmd_len = tok_len;
             continue;
         }
-        if (shell_stage_append_arg(stage, tok_ptr, tok_len) < 0) {
+        if (shell_stage_append_arg(stage, tok_buf, tok_len) < 0) {
             return -1;
         }
     }
@@ -1135,11 +1728,193 @@ static int shell_open_redirect_out(const char *path, uint32_t append) {
     return user_open(path, user_strlen(path), flags);
 }
 
-static int shell_execute_pipeline(struct shell_stage *stages, uint32_t stage_count) {
+static int shell_bg_has_active_jobs(void) {
+    for (uint32_t i = 0U; i < SHELL_BG_JOB_MAX; i++) {
+        if (g_shell_bg_jobs[i].used != 0U) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int shell_bg_has_free_slot(void) {
+    for (uint32_t i = 0U; i < SHELL_BG_JOB_MAX; i++) {
+        if (g_shell_bg_jobs[i].used == 0U) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void shell_bg_copy_preview(char *dst, uint32_t cap, const char *src) {
+    uint32_t start = 0U;
+    uint32_t len = 0U;
+
+    if (!dst || cap == 0U) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!src) {
+        return;
+    }
+    while (src[start] != '\0' && user_is_space(src[start])) {
+        start++;
+    }
+    while (src[start + len] != '\0' && len + 1U < cap) {
+        dst[len] = src[start + len];
+        len++;
+    }
+    dst[len] = '\0';
+}
+
+static void shell_bg_print_started(const struct shell_bg_job *job) {
+    char num[12];
+
+    if (!job) {
+        return;
+    }
+    shell_write_str(kBgStartPrefix);
+    shell_format_u32(num, sizeof(num), job->id);
+    shell_write_str(num);
+    shell_write_str(kBgPidPrefix);
+    shell_format_i32(num, sizeof(num), job->last_pid);
+    shell_write_str(num);
+    shell_write_str(kBgCmdPrefix);
+    shell_write_str(job->cmd_preview);
+    shell_write_str(kNewline);
+}
+
+static void shell_bg_print_done(const struct shell_bg_job *job) {
+    char num[12];
+
+    if (!job) {
+        return;
+    }
+    shell_write_str(kBgDonePrefix);
+    shell_format_u32(num, sizeof(num), job->id);
+    shell_write_str(num);
+    shell_write_str(kBgPidPrefix);
+    shell_format_i32(num, sizeof(num), job->last_pid);
+    shell_write_str(num);
+    shell_write_str(kBgStatusPrefix);
+    shell_format_i32(num, sizeof(num), job->last_status);
+    shell_write_str(num);
+    shell_write_str(kBgCmdPrefix);
+    shell_write_str(job->cmd_preview);
+    shell_write_str(kNewline);
+}
+
+static void shell_bg_print_overflow(const char *cmd_preview) {
+    shell_write_str(kBgOverflowPrefix);
+    if (cmd_preview) {
+        shell_write_str(cmd_preview);
+    }
+    shell_write_str(kNewline);
+}
+
+static int shell_bg_register_job(const int32_t pids[SHELL_PIPELINE_MAX],
+                                 uint32_t count,
+                                 const char *cmd_preview) {
+    struct shell_bg_job *job = 0;
+
+    if (!pids || count == 0U || count > SHELL_PIPELINE_MAX) {
+        return -1;
+    }
+    for (uint32_t i = 0U; i < SHELL_BG_JOB_MAX; i++) {
+        if (g_shell_bg_jobs[i].used == 0U) {
+            job = &g_shell_bg_jobs[i];
+            break;
+        }
+    }
+    if (!job) {
+        return -1;
+    }
+
+    job->used = 1U;
+    job->id = g_shell_bg_next_id++;
+    if (g_shell_bg_next_id == 0U) {
+        g_shell_bg_next_id = 1U;
+    }
+    job->remaining = count;
+    job->last_pid = pids[count - 1U];
+    job->last_status = 0;
+    for (uint32_t i = 0U; i < SHELL_PIPELINE_MAX; i++) {
+        job->pids[i] = (i < count) ? pids[i] : 0;
+    }
+    shell_bg_copy_preview(job->cmd_preview, sizeof(job->cmd_preview), cmd_preview);
+    shell_bg_print_started(job);
+    return 0;
+}
+
+static void shell_bg_note_reaped(int32_t pid, int32_t status) {
+    for (uint32_t i = 0U; i < SHELL_BG_JOB_MAX; i++) {
+        struct shell_bg_job *job = &g_shell_bg_jobs[i];
+
+        if (job->used == 0U) {
+            continue;
+        }
+        for (uint32_t j = 0U; j < SHELL_PIPELINE_MAX; j++) {
+            if (job->pids[j] != pid) {
+                continue;
+            }
+            job->pids[j] = 0;
+            if (job->remaining > 0U) {
+                job->remaining--;
+            }
+            if (pid == job->last_pid) {
+                job->last_status = status;
+            }
+            if (job->remaining == 0U) {
+                shell_bg_print_done(job);
+                job->used = 0U;
+            }
+            return;
+        }
+    }
+}
+
+static void shell_reap_background_jobs_nonblocking(void) {
+    for (;;) {
+        int32_t status = 0;
+        int32_t waited = user_waitpid(-1, &status, SYSCALL_WAITPID_FLAG_NOHANG);
+
+        if (waited <= 0) {
+            return;
+        }
+        shell_bg_note_reaped(waited, status);
+    }
+}
+
+static void shell_drain_background_jobs(void) {
+    while (shell_bg_has_active_jobs()) {
+        int32_t status = 0;
+        int32_t waited = user_waitpid(-1, &status, 0U);
+
+        if (waited <= 0) {
+            break;
+        }
+        shell_bg_note_reaped(waited, status);
+    }
+}
+
+static void shell_wait_background_jobs(void) {
+    if (!shell_bg_has_active_jobs()) {
+        shell_write_str(kWaitStub);
+        return;
+    }
+    shell_drain_background_jobs();
+    shell_write_str(kWaitDone);
+}
+
+static int shell_execute_pipeline(struct shell_stage *stages,
+                                  uint32_t stage_count,
+                                  uint32_t background,
+                                  const char *cmd_preview) {
     int32_t pipe_fds[SHELL_PIPELINE_MAX - 1U][2];
     int32_t child_pids[SHELL_PIPELINE_MAX];
     uint32_t spawned = 0U;
     int32_t last_status = 0;
+    int launch_failed = 0;
 
     for (uint32_t i = 0U; i < SHELL_PIPELINE_MAX - 1U; i++) {
         pipe_fds[i][0] = -1;
@@ -1149,10 +1924,16 @@ static int shell_execute_pipeline(struct shell_stage *stages, uint32_t stage_cou
         child_pids[i] = -1;
     }
 
+    if (background != 0U && shell_bg_has_free_slot() == 0) {
+        shell_bg_print_overflow(cmd_preview);
+        return -1;
+    }
+
     if (stage_count > 1U) {
         for (uint32_t i = 0U; i + 1U < stage_count; i++) {
             if (user_pipe(pipe_fds[i]) < 0) {
                 shell_write_str(kSpawnFail);
+                launch_failed = 1;
                 goto cleanup;
             }
         }
@@ -1247,8 +2028,8 @@ static int shell_execute_pipeline(struct shell_stage *stages, uint32_t stage_cou
 
         if (shell_spawn_external(stages[i].cmd,
                                  stages[i].cmd_len,
-                                 stages[i].cmdline_len != 0U ? stages[i].cmdline : 0,
-                                 stages[i].cmdline_len,
+                                 stages[i].spawn_cmdline_len != 0U ? stages[i].spawn_cmdline : 0,
+                                 stages[i].spawn_cmdline_len,
                                  &pid) < 0) {
             shell_restore_stdio(saved_fd);
             if (in_fd >= 3) {
@@ -1261,6 +2042,7 @@ static int shell_execute_pipeline(struct shell_stage *stages, uint32_t stage_cou
                 (void)user_close((uint32_t)err_fd);
             }
             shell_write_str(kSpawnFail);
+            launch_failed = 1;
             goto cleanup;
         }
         child_pids[spawned++] = pid;
@@ -1297,6 +2079,14 @@ cleanup:
         }
     }
 
+    if (!launch_failed && background != 0U) {
+        if (shell_bg_register_job(child_pids, spawned, cmd_preview) == 0) {
+            return 0;
+        }
+        shell_bg_print_overflow(cmd_preview);
+        shell_write_str(kBgTrackFail);
+    }
+
     for (uint32_t i = 0U; i < spawned; i++) {
         int32_t status = 0;
         if (user_waitpid(child_pids[i], &status, 0U) < 0) {
@@ -1310,17 +2100,360 @@ cleanup:
     return (int)last_status;
 }
 
+static int shell_history_handle_command(const char *args, uint32_t args_len) {
+    uint32_t arg_start;
+    uint32_t arg_end;
+
+    if (!args) {
+        shell_run_history();
+        return 1;
+    }
+    arg_start = shell_skip_spaces(args, 0U);
+    if (args[arg_start] == '\0') {
+        shell_run_history();
+        return 1;
+    }
+
+    arg_end = shell_token_end(args, arg_start);
+    if (user_str_eq_n(args + arg_start, "clear", arg_end - arg_start)) {
+        if (shell_skip_spaces(args, arg_end) != args_len) {
+            shell_write_str(kHistoryUsage);
+            return 1;
+        }
+        shell_history_clear();
+        shell_write_str(kHistoryCleared);
+        return 1;
+    }
+    if (user_str_eq_n(args + arg_start, "run", arg_end - arg_start)) {
+        uint32_t idx_start = shell_skip_spaces(args, arg_end);
+        uint32_t idx_end;
+        uint32_t display_index = 0U;
+        const char *run_line = 0;
+        uint32_t run_len = 0U;
+        char run_buf[SHELL_LINE_MAX];
+        char index_buf[12];
+        int rc;
+
+        if (idx_start >= args_len || args[idx_start] == '\0') {
+            shell_write_str(kHistoryUsage);
+            return 1;
+        }
+        idx_end = shell_token_end(args, idx_start);
+        if (shell_skip_spaces(args, idx_end) != args_len) {
+            shell_write_str(kHistoryUsage);
+            return 1;
+        }
+
+        for (uint32_t i = idx_start; i < idx_end; i++) {
+            uint32_t digit;
+            if (args[i] < '0' || args[i] > '9') {
+                shell_write_str(kHistoryUsage);
+                return 1;
+            }
+            digit = (uint32_t)(args[i] - '0');
+            if (display_index > 429496729U || (display_index == 429496729U && digit > 5U)) {
+                shell_write_str(kHistoryEventNotFound);
+                return 1;
+            }
+            display_index = display_index * 10U + digit;
+        }
+        if (shell_history_get_by_index(display_index, &run_line, &run_len) < 0 || !run_line) {
+            shell_write_str(kHistoryEventNotFound);
+            return 1;
+        }
+        if (run_len + 1U > sizeof(run_buf)) {
+            shell_write_str(kHistoryEventNotFound);
+            return 1;
+        }
+        if (g_shell_history_run_depth >= 4U) {
+            shell_write_str(kHistoryRunDepthExceeded);
+            return 1;
+        }
+
+        user_memcpy(run_buf, run_line, run_len);
+        run_buf[run_len] = '\0';
+        shell_format_u32(index_buf, sizeof(index_buf), display_index);
+        shell_write_str(kHistoryRunPrefix);
+        shell_write_str(index_buf);
+        shell_write_str(kHistoryEventArrow);
+        shell_write_str(run_buf);
+        shell_write_str(kNewline);
+
+        shell_history_push(run_buf, run_len);
+        g_shell_history_run_depth++;
+        rc = shell_dispatch_line(run_buf);
+        g_shell_history_run_depth--;
+        return rc;
+    }
+
+    shell_write_str(kHistoryUsage);
+    return 1;
+}
+
+static int shell_try_expand_history_event(char *line, uint32_t cap) {
+    uint32_t start;
+    uint32_t end;
+    uint32_t after;
+    uint32_t offset = 0U;
+    uint32_t token_len;
+    uint32_t line_len;
+    const char *match_line = 0;
+    uint32_t match_len = 0U;
+    char event_token[SHELL_LINE_MAX];
+
+    if (!line || cap == 0U) {
+        return 0;
+    }
+    start = shell_skip_spaces(line, 0U);
+    if (line[start] != '!') {
+        return 0;
+    }
+    end = shell_token_end(line, start);
+    after = shell_skip_spaces(line, end);
+    line_len = user_strlen(line);
+    if (after != line_len) {
+        return 0;
+    }
+
+    token_len = end - start;
+    if (token_len < 2U) {
+        return 0;
+    }
+    if (line[start + 1U] == '!') {
+        if (token_len != 2U || g_shell_history_count == 0U) {
+            shell_write_str(kHistoryEventNotFound);
+            return -1;
+        }
+        offset = 0U;
+    } else if (line[start + 1U] == '-') {
+        uint32_t value = 0U;
+        uint32_t idx = start + 2U;
+
+        if (token_len < 3U) {
+            shell_write_str(kHistoryEventNotFound);
+            return -1;
+        }
+        while (idx < end) {
+            uint32_t digit;
+            if (line[idx] < '0' || line[idx] > '9') {
+                shell_write_str(kHistoryEventNotFound);
+                return -1;
+            }
+            digit = (uint32_t)(line[idx] - '0');
+            if (value > 429496729U || (value == 429496729U && digit > 5U)) {
+                shell_write_str(kHistoryEventNotFound);
+                return -1;
+            }
+            value = value * 10U + digit;
+            idx++;
+        }
+        if (value == 0U || value > g_shell_history_count) {
+            shell_write_str(kHistoryEventNotFound);
+            return -1;
+        }
+        offset = value - 1U;
+    } else if (line[start + 1U] == '?') {
+        const char *query = line + start + 2U;
+        uint32_t query_len = token_len - 2U;
+        uint32_t match_offset = 0U;
+
+        if (query_len == 0U) {
+            shell_write_str(kHistoryEventNotFound);
+            return -1;
+        }
+        if (shell_history_search(query,
+                                 query_len,
+                                 0U,
+                                 &match_line,
+                                 &match_len,
+                                 &match_offset) < 0) {
+            shell_write_str(kHistoryEventNotFound);
+            return -1;
+        }
+    } else {
+        uint32_t idx = start + 1U;
+        int all_digits = 1;
+
+        while (idx < end) {
+            if (line[idx] < '0' || line[idx] > '9') {
+                all_digits = 0;
+                break;
+            }
+            idx++;
+        }
+
+        if (all_digits != 0) {
+            uint32_t value = 0U;
+
+            idx = start + 1U;
+            while (idx < end) {
+                uint32_t digit = (uint32_t)(line[idx] - '0');
+
+                if (value > 429496729U || (value == 429496729U && digit > 5U)) {
+                    shell_write_str(kHistoryEventNotFound);
+                    return -1;
+                }
+                value = value * 10U + digit;
+                idx++;
+            }
+            if (value == 0U || value > g_shell_history_count) {
+                shell_write_str(kHistoryEventNotFound);
+                return -1;
+            }
+            offset = g_shell_history_count - value;
+        } else {
+            const char *prefix = line + start + 1U;
+            uint32_t prefix_len = token_len - 1U;
+
+            if (prefix_len == 0U ||
+                shell_history_find_prefix(prefix, prefix_len, &match_line, &match_len) < 0) {
+                shell_write_str(kHistoryEventNotFound);
+                return -1;
+            }
+        }
+    }
+
+    if (!match_line && (shell_history_get(offset, &match_line, &match_len) < 0 || !match_line)) {
+        shell_write_str(kHistoryEventNotFound);
+        return -1;
+    }
+    if (match_len + 1U > cap) {
+        shell_write_str(kHistoryEventNotFound);
+        return -1;
+    }
+    if (token_len + 1U > sizeof(event_token)) {
+        shell_write_str(kHistoryEventNotFound);
+        return -1;
+    }
+
+    user_memcpy(event_token, line + start, token_len);
+    event_token[token_len] = '\0';
+
+    user_memcpy(line, match_line, match_len);
+    line[match_len] = '\0';
+    shell_write_str(kHistoryEventPrefix);
+    shell_write_str(event_token);
+    shell_write_str(kHistoryEventArrow);
+    shell_write_str(match_line);
+    shell_write_str(kNewline);
+    return 1;
+}
+
+static int shell_try_expand_history_subst(char *line, uint32_t cap) {
+    uint32_t start;
+    uint32_t end;
+    uint32_t after;
+    uint32_t line_len;
+    uint32_t token_len;
+    uint32_t old_start;
+    uint32_t old_len;
+    uint32_t new_start;
+    uint32_t new_len;
+    uint32_t split = 0U;
+    const char *latest_line = 0;
+    uint32_t latest_len = 0U;
+    uint32_t match_idx = 0U;
+    uint32_t out_len = 0U;
+    char expanded[SHELL_LINE_MAX];
+    char token_buf[SHELL_LINE_MAX];
+
+    if (!line || cap == 0U) {
+        return 0;
+    }
+    start = shell_skip_spaces(line, 0U);
+    if (line[start] != '^') {
+        return 0;
+    }
+    end = shell_token_end(line, start);
+    after = shell_skip_spaces(line, end);
+    line_len = user_strlen(line);
+    if (after != line_len) {
+        return 0;
+    }
+
+    token_len = end - start;
+    if (token_len < 3U || token_len + 1U > sizeof(token_buf)) {
+        return 0;
+    }
+
+    for (uint32_t i = start + 1U; i < end; i++) {
+        if (line[i] == '^') {
+            split = i;
+            break;
+        }
+    }
+    if (split == 0U) {
+        return 0;
+    }
+
+    old_start = start + 1U;
+    old_len = split - old_start;
+    if (old_len == 0U) {
+        shell_write_str(kHistorySubstFailed);
+        return -1;
+    }
+    new_start = split + 1U;
+    if (new_start > end) {
+        shell_write_str(kHistorySubstFailed);
+        return -1;
+    }
+    new_len = end - new_start;
+    if (new_len > 0U && line[end - 1U] == '^') {
+        new_len--;
+    }
+
+    if (g_shell_history_count == 0U ||
+        shell_history_get(0U, &latest_line, &latest_len) < 0 ||
+        !latest_line) {
+        shell_write_str(kHistorySubstFailed);
+        return -1;
+    }
+    if (shell_find_substring(latest_line, latest_len, line + old_start, old_len, &match_idx) < 0) {
+        shell_write_str(kHistorySubstFailed);
+        return -1;
+    }
+
+    out_len = match_idx + new_len + (latest_len - (match_idx + old_len));
+    if (out_len + 1U > sizeof(expanded) || out_len + 1U > cap) {
+        shell_write_str(kHistorySubstFailed);
+        return -1;
+    }
+    if (match_idx != 0U) {
+        user_memcpy(expanded, latest_line, match_idx);
+    }
+    if (new_len != 0U) {
+        user_memcpy(expanded + match_idx, line + new_start, new_len);
+    }
+    if (latest_len > match_idx + old_len) {
+        user_memcpy(expanded + match_idx + new_len,
+                    latest_line + match_idx + old_len,
+                    latest_len - (match_idx + old_len));
+    }
+    expanded[out_len] = '\0';
+
+    user_memcpy(token_buf, line + start, token_len);
+    token_buf[token_len] = '\0';
+    user_memcpy(line, expanded, out_len);
+    line[out_len] = '\0';
+
+    shell_write_str(kHistoryEventPrefix);
+    shell_write_str(token_buf);
+    shell_write_str(kHistoryEventArrow);
+    shell_write_str(line);
+    shell_write_str(kNewline);
+    return 1;
+}
+
 static int shell_dispatch_builtin(struct shell_stage *stage) {
     if (user_str_eq_n(stage->cmd, "help", stage->cmd_len)) {
         shell_write_str(kHelp);
         return 1;
     }
     if (user_str_eq_n(stage->cmd, "history", stage->cmd_len)) {
-        shell_run_history();
-        return 1;
+        return shell_history_handle_command(stage->cmdline, stage->cmdline_len);
     }
     if (user_str_eq_n(stage->cmd, "wait", stage->cmd_len)) {
-        shell_write_str(kWaitStub);
+        shell_wait_background_jobs();
         return 1;
     }
     if (user_str_eq_n(stage->cmd, "ps", stage->cmd_len)) {
@@ -1346,86 +2479,22 @@ static int shell_dispatch_builtin(struct shell_stage *stage) {
     return 1;
 }
 
-static int shell_dispatch_simple_line(const char *line) {
-    uint32_t cmd_start = shell_skip_spaces(line, 0U);
-    uint32_t cmd_end;
-    uint32_t arg_start;
-
-    if (!line || line[cmd_start] == '\0') {
-        return 1;
-    }
-
-    cmd_end = shell_token_end(line, cmd_start);
-    arg_start = shell_skip_spaces(line, cmd_end);
-
-    if (user_str_eq_n(line + cmd_start, "help", cmd_end - cmd_start)) {
-        shell_write_str(kHelp);
-        return 1;
-    }
-    if (user_str_eq_n(line + cmd_start, "history", cmd_end - cmd_start)) {
-        shell_run_history();
-        return 1;
-    }
-    if (user_str_eq_n(line + cmd_start, "wait", cmd_end - cmd_start)) {
-        shell_write_str(kWaitStub);
-        return 1;
-    }
-    if (user_str_eq_n(line + cmd_start, "ps", cmd_end - cmd_start)) {
-        shell_run_ps();
-        return 1;
-    }
-    if (user_str_eq_n(line + cmd_start, "ls", cmd_end - cmd_start)) {
-        shell_run_ls(line + arg_start, user_strlen(line + arg_start));
-        return 1;
-    }
-    if (user_str_eq_n(line + cmd_start, "pwd", cmd_end - cmd_start)) {
-        shell_run_pwd();
-        return 1;
-    }
-    if (user_str_eq_n(line + cmd_start, "cd", cmd_end - cmd_start)) {
-        shell_run_cd(line + arg_start, user_strlen(line + arg_start));
-        return 1;
-    }
-    if (user_str_eq_n(line + cmd_start, "exit", cmd_end - cmd_start)) {
-        shell_write_str(kExit);
-        return 0;
-    }
-
-    shell_run_external_simple(line + cmd_start,
-                              cmd_end - cmd_start,
-                              line + arg_start,
-                              user_strlen(line + arg_start));
-    return 1;
-}
-
-static int shell_line_has_meta(const char *line) {
-    uint32_t i = 0U;
-
-    if (!line) {
-        return 0;
-    }
-    while (line[i] != '\0') {
-        if (line[i] == '|' || line[i] == '<' || line[i] == '>') {
-            return 1;
-        }
-        i++;
-    }
-    return 0;
-}
-
 static int shell_dispatch_line(char *line) {
     uint32_t stage_count = 0U;
+    uint32_t background = 0U;
     int has_meta = 0;
     int rc;
 
     if (!line) {
         return 1;
     }
-    if (!shell_line_has_meta(line)) {
-        return shell_dispatch_simple_line(line);
-    }
 
-    rc = shell_parse_stages(line, g_shell_stages, SHELL_PIPELINE_MAX, &stage_count, &has_meta);
+    rc = shell_parse_stages(line,
+                            g_shell_stages,
+                            SHELL_PIPELINE_MAX,
+                            &stage_count,
+                            &has_meta,
+                            &background);
     if (rc < 0) {
         shell_write_str(kParseFail);
         return 1;
@@ -1445,24 +2514,38 @@ static int shell_dispatch_line(char *line) {
         }
     }
 
-    (void)shell_execute_pipeline(g_shell_stages, stage_count);
+    (void)shell_execute_pipeline(g_shell_stages, stage_count, background, line);
     return 1;
 }
 
 void _start(void) {
     (void)shell_sync_cwd();
+    shell_history_load_persisted();
     shell_write_str(kBanner);
     for (;;) {
         int32_t rc;
 
+        shell_reap_background_jobs_nonblocking();
         shell_write_str(shell_build_prompt());
         rc = shell_read_line(g_shell_line, sizeof(g_shell_line));
         if (rc < 0) {
+            shell_drain_background_jobs();
             shell_write_str(kExit);
             user_exit(1);
         }
+        if (shell_try_expand_history_subst(g_shell_line, sizeof(g_shell_line)) < 0) {
+            continue;
+        }
+        if (shell_try_expand_history_event(g_shell_line, sizeof(g_shell_line)) < 0) {
+            continue;
+        }
+        if (g_shell_line[0] != '\0') {
+            shell_history_push(g_shell_line, user_strlen(g_shell_line));
+        }
         if (!shell_dispatch_line(g_shell_line)) {
+            shell_drain_background_jobs();
             user_exit(0);
         }
+        shell_reap_background_jobs_nonblocking();
     }
 }

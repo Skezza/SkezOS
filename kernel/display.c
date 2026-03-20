@@ -11,6 +11,11 @@
 #include "timer.h"
 #include "vga.h"
 
+#define DISPLAY_FB_COMMAND_RATE_WINDOW 8U
+#define DISPLAY_FB_COMMAND_SLOW_MIN_TICKS 24U
+#define DISPLAY_FB_COMMAND_SLOW_MARGIN_TICKS 6U
+#define DISPLAY_FB_COMMAND_SLOW_MULTIPLIER 2U
+
 typedef enum {
     DISPLAY_MODE_VGA = 0,
     DISPLAY_MODE_FRAMEBUFFER = 1,
@@ -38,6 +43,13 @@ typedef enum {
 } display_prompt_hint_t;
 
 typedef enum {
+    DISPLAY_COMMAND_HEALTH_BOOT = 0,
+    DISPLAY_COMMAND_HEALTH_OK = 1,
+    DISPLAY_COMMAND_HEALTH_WARN = 2,
+    DISPLAY_COMMAND_HEALTH_DEGRADED = 3,
+} display_command_health_state_t;
+
+typedef enum {
     DISPLAY_TRANSITION_CAUSE_NONE = 0,
     DISPLAY_TRANSITION_CAUSE_PROMPT = 1,
     DISPLAY_TRANSITION_CAUSE_WAIT = 2,
@@ -55,7 +67,7 @@ struct display_timeline_entry {
 
 struct display_glyph {
     char ch;
-    uint8_t rows[5];
+    uint8_t rows[7];
 };
 
 struct display_framebuffer_state {
@@ -81,6 +93,36 @@ struct display_framebuffer_state {
     uint8_t command_active;
     uint32_t command_start_ticks;
     char command_tag;
+    uint32_t command_last_ticks;
+    uint32_t command_avg_ticks;
+    uint32_t command_peak_ticks;
+    uint32_t command_samples;
+    uint8_t command_last_success;
+    uint8_t command_last_slow;
+    uint32_t command_last_budget_ticks;
+    uint32_t command_slow_count;
+    uint32_t command_slow_streak;
+    uint32_t command_slow_streak_peak;
+    uint32_t command_ok_count;
+    uint32_t command_fail_count;
+    uint32_t command_fail_streak;
+    uint32_t command_fail_streak_peak;
+    uint32_t command_finish_ticks[DISPLAY_FB_COMMAND_RATE_WINDOW];
+    uint32_t command_finish_count;
+    uint32_t command_finish_head;
+    uint8_t command_recent_outcomes[DISPLAY_FB_COMMAND_RATE_WINDOW];
+    uint32_t command_recent_count;
+    uint32_t command_recent_head;
+    uint8_t command_health_state;
+    uint32_t command_health_state_changes;
+    uint32_t command_health_state_since_ticks;
+    uint32_t command_health_episode_start_ticks;
+    uint32_t command_health_last_recovery_ticks;
+    uint32_t command_health_avg_recovery_ticks;
+    uint32_t command_health_peak_recovery_ticks;
+    uint32_t command_health_recovery_count;
+    uint32_t command_health_warn_dwell_ticks;
+    uint32_t command_health_degr_dwell_ticks;
     uint8_t prompt_hint;
     uint32_t prompt_hint_until_ticks;
     char prompt_hint_tag;
@@ -89,101 +131,101 @@ struct display_framebuffer_state {
 };
 
 static const struct display_glyph g_display_font[] = {
-    { ' ', { 0, 0, 0, 0, 0 } },
-    { '!', { 2, 2, 2, 0, 2 } },
-    { '"', { 5, 5, 0, 0, 0 } },
-    { '#', { 5, 7, 5, 7, 5 } },
-    { '$', { 2, 7, 6, 3, 7 } },
-    { '%', { 5, 1, 2, 4, 5 } },
-    { '&', { 2, 5, 2, 5, 3 } },
-    { '\'', { 2, 2, 0, 0, 0 } },
-    { '(', { 1, 2, 2, 2, 1 } },
-    { ')', { 4, 2, 2, 2, 4 } },
-    { '*', { 0, 5, 2, 5, 0 } },
-    { '+', { 0, 2, 7, 2, 0 } },
-    { ',', { 0, 0, 0, 2, 4 } },
-    { '-', { 0, 0, 7, 0, 0 } },
-    { '.', { 0, 0, 0, 0, 2 } },
-    { '/', { 1, 1, 2, 4, 4 } },
-    { '0', { 7, 5, 5, 5, 7 } },
-    { '1', { 2, 6, 2, 2, 7 } },
-    { '2', { 7, 1, 7, 4, 7 } },
-    { '3', { 7, 1, 7, 1, 7 } },
-    { '4', { 5, 5, 7, 1, 1 } },
-    { '5', { 7, 4, 7, 1, 7 } },
-    { '6', { 7, 4, 7, 5, 7 } },
-    { '7', { 7, 1, 1, 1, 1 } },
-    { '8', { 7, 5, 7, 5, 7 } },
-    { '9', { 7, 5, 7, 1, 7 } },
-    { ':', { 0, 2, 0, 2, 0 } },
-    { ';', { 0, 2, 0, 2, 4 } },
-    { '<', { 1, 2, 4, 2, 1 } },
-    { '=', { 0, 7, 0, 7, 0 } },
-    { '>', { 4, 2, 1, 2, 4 } },
-    { '?', { 6, 1, 2, 0, 2 } },
-    { '@', { 2, 5, 7, 4, 3 } },
-    { 'A', { 2, 5, 7, 5, 5 } },
-    { 'B', { 6, 5, 6, 5, 6 } },
-    { 'C', { 3, 4, 4, 4, 3 } },
-    { 'D', { 6, 5, 5, 5, 6 } },
-    { 'E', { 7, 4, 6, 4, 7 } },
-    { 'F', { 7, 4, 6, 4, 4 } },
-    { 'G', { 3, 4, 5, 5, 3 } },
-    { 'H', { 5, 5, 7, 5, 5 } },
-    { 'I', { 7, 2, 2, 2, 7 } },
-    { 'J', { 1, 1, 1, 5, 2 } },
-    { 'K', { 5, 5, 6, 5, 5 } },
-    { 'L', { 4, 4, 4, 4, 7 } },
-    { 'M', { 5, 7, 7, 5, 5 } },
-    { 'N', { 5, 7, 7, 7, 5 } },
-    { 'O', { 2, 5, 5, 5, 2 } },
-    { 'P', { 6, 5, 6, 4, 4 } },
-    { 'Q', { 2, 5, 5, 7, 3 } },
-    { 'R', { 6, 5, 6, 5, 5 } },
-    { 'S', { 3, 4, 2, 1, 6 } },
-    { 'T', { 7, 2, 2, 2, 2 } },
-    { 'U', { 5, 5, 5, 5, 7 } },
-    { 'V', { 5, 5, 5, 5, 2 } },
-    { 'W', { 5, 5, 7, 7, 5 } },
-    { 'X', { 5, 5, 2, 5, 5 } },
-    { 'Y', { 5, 5, 2, 2, 2 } },
-    { 'Z', { 7, 1, 2, 4, 7 } },
-    { '[', { 3, 2, 2, 2, 3 } },
-    { '\\', { 4, 4, 2, 1, 1 } },
-    { ']', { 6, 2, 2, 2, 6 } },
-    { '^', { 2, 5, 0, 0, 0 } },
-    { '_', { 0, 0, 0, 0, 7 } },
-    { '`', { 4, 2, 0, 0, 0 } },
-    { 'a', { 0, 3, 5, 5, 3 } },
-    { 'b', { 4, 6, 5, 5, 6 } },
-    { 'c', { 0, 3, 4, 4, 3 } },
-    { 'd', { 1, 3, 5, 5, 3 } },
-    { 'e', { 0, 3, 7, 4, 3 } },
-    { 'f', { 1, 2, 7, 2, 2 } },
-    { 'g', { 0, 3, 5, 3, 1 } },
-    { 'h', { 4, 6, 5, 5, 5 } },
-    { 'i', { 2, 0, 6, 2, 7 } },
-    { 'j', { 1, 0, 1, 5, 2 } },
-    { 'k', { 4, 5, 6, 5, 5 } },
-    { 'l', { 6, 2, 2, 2, 7 } },
-    { 'm', { 0, 6, 7, 5, 5 } },
-    { 'n', { 0, 6, 5, 5, 5 } },
-    { 'o', { 0, 2, 5, 5, 2 } },
-    { 'p', { 0, 6, 5, 6, 4 } },
-    { 'q', { 0, 3, 5, 3, 1 } },
-    { 'r', { 0, 6, 5, 4, 4 } },
-    { 's', { 0, 3, 6, 1, 6 } },
-    { 't', { 2, 7, 2, 2, 1 } },
-    { 'u', { 0, 5, 5, 5, 3 } },
-    { 'v', { 0, 5, 5, 5, 2 } },
-    { 'w', { 0, 5, 5, 7, 5 } },
-    { 'x', { 0, 5, 2, 5, 5 } },
-    { 'y', { 0, 5, 5, 3, 1 } },
-    { 'z', { 0, 7, 1, 2, 7 } },
-    { '{', { 1, 2, 6, 2, 1 } },
-    { '|', { 2, 2, 2, 2, 2 } },
-    { '}', { 4, 2, 3, 2, 4 } },
-    { '~', { 0, 3, 6, 0, 0 } },
+    { ' ', { 0, 0, 0, 0, 0, 0, 0 } },
+    { '!', { 4, 4, 4, 4, 4, 0, 4 } },
+    { '"', { 10, 10, 10, 0, 0, 0, 0 } },
+    { '#', { 10, 10, 31, 10, 31, 10, 10 } },
+    { '$', { 4, 15, 20, 14, 5, 30, 4 } },
+    { '%', { 24, 25, 2, 4, 8, 19, 3 } },
+    { '&', { 8, 20, 20, 8, 21, 18, 13 } },
+    { '\'', { 6, 6, 4, 8, 0, 0, 0 } },
+    { '(', { 2, 4, 8, 8, 8, 4, 2 } },
+    { ')', { 8, 4, 2, 2, 2, 4, 8 } },
+    { '*', { 4, 21, 14, 31, 14, 21, 4 } },
+    { '+', { 0, 4, 4, 31, 4, 4, 0 } },
+    { ',', { 0, 0, 0, 0, 6, 6, 4 } },
+    { '-', { 0, 0, 0, 31, 0, 0, 0 } },
+    { '.', { 0, 0, 0, 0, 0, 6, 6 } },
+    { '/', { 0, 1, 2, 4, 8, 16, 0 } },
+    { '0', { 14, 17, 19, 21, 25, 17, 14 } },
+    { '1', { 4, 12, 4, 4, 4, 4, 14 } },
+    { '2', { 14, 17, 1, 14, 16, 16, 31 } },
+    { '3', { 31, 1, 2, 6, 1, 17, 14 } },
+    { '4', { 2, 6, 10, 18, 31, 2, 2 } },
+    { '5', { 31, 16, 30, 1, 1, 17, 14 } },
+    { '6', { 7, 8, 16, 30, 17, 17, 14 } },
+    { '7', { 31, 1, 1, 2, 4, 8, 16 } },
+    { '8', { 14, 17, 17, 14, 17, 17, 14 } },
+    { '9', { 14, 17, 17, 15, 1, 2, 28 } },
+    { ':', { 0, 0, 4, 0, 4, 0, 0 } },
+    { ';', { 0, 0, 4, 0, 4, 4, 8 } },
+    { '<', { 1, 2, 4, 8, 4, 2, 1 } },
+    { '=', { 0, 0, 31, 0, 31, 0, 0 } },
+    { '>', { 8, 4, 2, 1, 2, 4, 8 } },
+    { '?', { 14, 17, 1, 6, 4, 0, 4 } },
+    { '@', { 14, 17, 21, 23, 22, 16, 15 } },
+    { 'A', { 4, 10, 17, 17, 31, 17, 17 } },
+    { 'B', { 30, 17, 17, 30, 17, 17, 30 } },
+    { 'C', { 14, 17, 16, 16, 16, 17, 14 } },
+    { 'D', { 30, 17, 17, 17, 17, 17, 30 } },
+    { 'E', { 31, 16, 16, 30, 16, 16, 31 } },
+    { 'F', { 31, 16, 16, 30, 16, 16, 16 } },
+    { 'G', { 15, 17, 16, 16, 19, 17, 15 } },
+    { 'H', { 17, 17, 17, 31, 17, 17, 17 } },
+    { 'I', { 14, 4, 4, 4, 4, 4, 14 } },
+    { 'J', { 7, 2, 2, 2, 2, 18, 12 } },
+    { 'K', { 17, 18, 20, 24, 20, 18, 17 } },
+    { 'L', { 16, 16, 16, 16, 16, 16, 31 } },
+    { 'M', { 17, 27, 21, 21, 21, 17, 17 } },
+    { 'N', { 17, 17, 25, 21, 19, 17, 17 } },
+    { 'O', { 14, 17, 17, 17, 17, 17, 14 } },
+    { 'P', { 30, 17, 17, 30, 16, 16, 16 } },
+    { 'Q', { 14, 17, 17, 17, 21, 18, 13 } },
+    { 'R', { 30, 17, 17, 30, 20, 18, 17 } },
+    { 'S', { 14, 17, 16, 14, 1, 17, 14 } },
+    { 'T', { 31, 21, 4, 4, 4, 4, 4 } },
+    { 'U', { 17, 17, 17, 17, 17, 17, 14 } },
+    { 'V', { 17, 17, 17, 17, 17, 10, 4 } },
+    { 'W', { 17, 17, 17, 21, 21, 21, 10 } },
+    { 'X', { 17, 17, 10, 4, 10, 17, 17 } },
+    { 'Y', { 17, 17, 10, 4, 4, 4, 4 } },
+    { 'Z', { 31, 1, 2, 14, 8, 16, 31 } },
+    { '[', { 15, 8, 8, 8, 8, 8, 15 } },
+    { '\\', { 0, 16, 8, 4, 2, 1, 0 } },
+    { ']', { 15, 1, 1, 1, 1, 1, 15 } },
+    { '^', { 4, 10, 17, 0, 0, 0, 0 } },
+    { '_', { 0, 0, 0, 0, 0, 0, 31 } },
+    { '`', { 12, 12, 4, 2, 0, 0, 0 } },
+    { 'a', { 0, 0, 12, 2, 14, 18, 15 } },
+    { 'b', { 16, 16, 22, 25, 17, 25, 22 } },
+    { 'c', { 0, 0, 14, 17, 16, 17, 14 } },
+    { 'd', { 1, 1, 13, 19, 17, 19, 13 } },
+    { 'e', { 0, 0, 14, 17, 31, 16, 14 } },
+    { 'f', { 2, 5, 4, 14, 4, 4, 4 } },
+    { 'g', { 0, 0, 14, 19, 19, 13, 1 } },
+    { 'h', { 16, 16, 22, 25, 17, 17, 17 } },
+    { 'i', { 4, 0, 12, 4, 4, 4, 14 } },
+    { 'j', { 2, 0, 2, 2, 2, 18, 12 } },
+    { 'k', { 16, 16, 18, 20, 24, 20, 18 } },
+    { 'l', { 12, 4, 4, 4, 4, 4, 14 } },
+    { 'm', { 0, 0, 26, 21, 21, 21, 21 } },
+    { 'n', { 0, 0, 22, 25, 17, 17, 17 } },
+    { 'o', { 0, 0, 14, 17, 17, 17, 14 } },
+    { 'p', { 0, 0, 22, 25, 25, 22, 16 } },
+    { 'q', { 0, 0, 13, 19, 19, 13, 1 } },
+    { 'r', { 0, 0, 22, 25, 16, 16, 16 } },
+    { 's', { 0, 0, 15, 16, 14, 1, 30 } },
+    { 't', { 4, 4, 31, 4, 4, 5, 2 } },
+    { 'u', { 0, 0, 17, 17, 17, 19, 13 } },
+    { 'v', { 0, 0, 17, 17, 17, 10, 4 } },
+    { 'w', { 0, 0, 17, 17, 21, 21, 10 } },
+    { 'x', { 0, 0, 17, 10, 4, 10, 17 } },
+    { 'y', { 0, 0, 17, 17, 15, 1, 17 } },
+    { 'z', { 0, 0, 31, 2, 4, 8, 31 } },
+    { '{', { 2, 4, 4, 8, 4, 4, 2 } },
+    { '|', { 4, 4, 4, 0, 4, 4, 4 } },
+    { '}', { 8, 4, 4, 2, 4, 4, 8 } },
+    { '~', { 8, 21, 2, 0, 0, 0, 0 } },
 };
 
 static struct display_framebuffer_state g_display_fb;
@@ -193,14 +235,14 @@ static display_mode_t g_display_mode = DISPLAY_MODE_VGA;
     (PAGING_PAGE_FLAG_WRITABLE | PAGING_PAGE_FLAG_WRITE_THROUGH | PAGING_PAGE_FLAG_CACHE_DISABLE)
 #define DISPLAY_FB_CHAR_W 14U
 #define DISPLAY_FB_CHAR_H 17U
-#define DISPLAY_FB_FONT_SRC_W 3U
-#define DISPLAY_FB_FONT_SRC_H 5U
-#define DISPLAY_FB_GLYPH_W 4U
-#define DISPLAY_FB_GLYPH_H 8U
+#define DISPLAY_FB_FONT_SRC_W 5U
+#define DISPLAY_FB_FONT_SRC_H 7U
+#define DISPLAY_FB_GLYPH_W 5U
+#define DISPLAY_FB_GLYPH_H 7U
 #define DISPLAY_FB_GLYPH_SCALE_X 2U
 #define DISPLAY_FB_GLYPH_SCALE_Y 2U
-#define DISPLAY_FB_GLYPH_X_PAD 3U
-#define DISPLAY_FB_GLYPH_Y_PAD 0U
+#define DISPLAY_FB_GLYPH_X_PAD 2U
+#define DISPLAY_FB_GLYPH_Y_PAD 1U
 #define DISPLAY_FB_HEADER_ROWS 1U
 #define DISPLAY_FB_FOOTER_ROWS 1U
 #define DISPLAY_FB_PANEL_MARGIN_X 16U
@@ -245,6 +287,7 @@ static void display_framebuffer_draw_text_packed(uint32_t x, uint32_t y,
                                                  uint32_t bg_pixel);
 static void display_append_text(char *dst, uint32_t *len, uint32_t cap, const char *text);
 static void display_append_u32(char *dst, uint32_t *len, uint32_t cap, uint32_t value);
+static void display_append_compact_u32(char *dst, uint32_t *len, uint32_t cap, uint32_t value);
 static void display_append_mib_value(char *dst, uint32_t *len, uint32_t cap, uint32_t frame_count);
 static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_t cap);
 static void display_framebuffer_draw_header_metrics(void);
@@ -255,7 +298,26 @@ static void display_verify_font_coverage(void);
 static uint32_t display_hash_u32(uint32_t hash, uint32_t value);
 static uint32_t display_compute_gui_state_hash(void);
 static const char *display_transition_cause_label(display_transition_cause_t cause);
+static const char *display_command_health_label(display_command_health_state_t state);
 static void display_framebuffer_build_footer_legend(char *legend_text, uint32_t cap);
+static void display_framebuffer_build_footer_latency(char *latency_text, uint32_t cap);
+static uint32_t display_command_latency_budget_ticks(uint32_t avg_ticks, uint32_t samples);
+static const char *display_command_latency_status_label(void);
+static uint32_t display_command_rate_per_min(void);
+static void display_command_recent_push(int success);
+static uint32_t display_command_recent_success_pct(uint32_t *out_samples);
+static void display_command_health_account_dwell(uint32_t now_ticks,
+                                                 display_command_health_state_t state);
+static display_command_health_state_t display_classify_command_health(uint32_t success_pct,
+                                                                      uint32_t recent_success_pct,
+                                                                      uint32_t fail_streak,
+                                                                      uint32_t recent_samples,
+                                                                      uint32_t samples);
+static void display_update_command_health_state(uint32_t success_pct,
+                                                uint32_t recent_success_pct,
+                                                uint32_t recent_samples,
+                                                uint32_t rate_per_min,
+                                                char tag);
 static int display_line_starts_with(const char *text, uint32_t len, const char *prefix);
 static int display_line_contains(const char *text, uint32_t len, const char *needle);
 static int display_parse_wait_exit_code(const char *text, uint32_t len, int32_t *out_exit_code);
@@ -382,6 +444,36 @@ static uint32_t display_ticks32(void) {
     return (uint32_t)(timer_ticks_snapshot() & 0xFFFFFFFFULL);
 }
 
+static void display_reset_command_health(void) {
+    g_display_fb.command_last_slow = 0U;
+    g_display_fb.command_last_budget_ticks = 0U;
+    g_display_fb.command_slow_count = 0U;
+    g_display_fb.command_slow_streak = 0U;
+    g_display_fb.command_slow_streak_peak = 0U;
+    g_display_fb.command_ok_count = 0U;
+    g_display_fb.command_fail_count = 0U;
+    g_display_fb.command_fail_streak = 0U;
+    g_display_fb.command_fail_streak_peak = 0U;
+    g_display_fb.command_finish_count = 0U;
+    g_display_fb.command_finish_head = 0U;
+    for (uint32_t i = 0U; i < DISPLAY_FB_COMMAND_RATE_WINDOW; i++) {
+        g_display_fb.command_finish_ticks[i] = 0U;
+        g_display_fb.command_recent_outcomes[i] = 0U;
+    }
+    g_display_fb.command_recent_count = 0U;
+    g_display_fb.command_recent_head = 0U;
+    g_display_fb.command_health_state = DISPLAY_COMMAND_HEALTH_BOOT;
+    g_display_fb.command_health_state_changes = 0U;
+    g_display_fb.command_health_state_since_ticks = display_ticks32();
+    g_display_fb.command_health_episode_start_ticks = 0U;
+    g_display_fb.command_health_last_recovery_ticks = 0U;
+    g_display_fb.command_health_avg_recovery_ticks = 0U;
+    g_display_fb.command_health_peak_recovery_ticks = 0U;
+    g_display_fb.command_health_recovery_count = 0U;
+    g_display_fb.command_health_warn_dwell_ticks = 0U;
+    g_display_fb.command_health_degr_dwell_ticks = 0U;
+}
+
 static void display_prompt_hint_set(display_prompt_hint_t hint, char tag, uint32_t hold_ticks) {
     g_display_fb.prompt_hint = (uint8_t)hint;
     g_display_fb.prompt_hint_tag = tag;
@@ -476,6 +568,45 @@ static void display_framebuffer_draw_prompt_strip_idle(void) {
     case DISPLAY_PROMPT_HINT_INPUT:
     default:
         break;
+    }
+
+    if ((display_prompt_hint_t)g_display_fb.prompt_hint == DISPLAY_PROMPT_HINT_INPUT) {
+        display_command_health_state_t health_state =
+            (display_command_health_state_t)g_display_fb.command_health_state;
+        if (health_state == DISPLAY_COMMAND_HEALTH_DEGRADED) {
+            prompt_fg = display_framebuffer_pack_rgb(255U, 226U, 221U);
+            prompt_well_bg = display_framebuffer_pack_rgb(34U, 10U, 13U);
+            prompt_accent = display_framebuffer_pack_rgb(228U, 96U, 86U);
+            status_label[0] = 'D';
+            status_label[1] = 'E';
+            status_label[2] = 'G';
+            status_label[3] = 'R';
+            status_label[4] = '\0';
+        } else if (health_state == DISPLAY_COMMAND_HEALTH_WARN) {
+            prompt_fg = display_framebuffer_pack_rgb(224U, 233U, 246U);
+            prompt_well_bg = display_framebuffer_pack_rgb(34U, 10U, 13U);
+            prompt_accent = display_framebuffer_pack_rgb(248U, 188U, 96U);
+            if (g_display_fb.command_fail_streak != 0U) {
+                uint32_t label_len = 4U;
+                uint32_t fail_streak = g_display_fb.command_fail_streak;
+
+                if (fail_streak > 999U) {
+                    fail_streak = 999U;
+                }
+                status_label[0] = 'C';
+                status_label[1] = 'H';
+                status_label[2] = 'K';
+                status_label[3] = ' ';
+                status_label[4] = '\0';
+                display_append_u32(status_label, &label_len, sizeof(status_label), fail_streak);
+            } else {
+                status_label[0] = 'W';
+                status_label[1] = 'A';
+                status_label[2] = 'R';
+                status_label[3] = 'N';
+                status_label[4] = '\0';
+            }
+        }
     }
 
     display_framebuffer_draw_header_metrics();
@@ -636,7 +767,7 @@ static uint32_t display_hash_u32(uint32_t hash, uint32_t value) {
 static uint32_t display_compute_gui_state_hash(void) {
     uint32_t hash = 2166136261U;
 
-    hash = display_hash_u32(hash, 0x46425334U); /* "FBS4" */
+    hash = display_hash_u32(hash, 0x46425335U); /* "FBS5" */
     hash = display_hash_u32(hash, g_display_fb.info.width);
     hash = display_hash_u32(hash, g_display_fb.info.height);
     hash = display_hash_u32(hash, g_display_fb.info.pitch);
@@ -706,18 +837,368 @@ static const char *display_transition_cause_label(display_transition_cause_t cau
     }
 }
 
+static const char *display_command_health_label(display_command_health_state_t state) {
+    switch (state) {
+    case DISPLAY_COMMAND_HEALTH_OK:
+        return "OK";
+    case DISPLAY_COMMAND_HEALTH_WARN:
+        return "WARN";
+    case DISPLAY_COMMAND_HEALTH_DEGRADED:
+        return "DEGR";
+    case DISPLAY_COMMAND_HEALTH_BOOT:
+    default:
+        return "BOOT";
+    }
+}
+
+static display_command_health_state_t display_classify_command_health(uint32_t success_pct,
+                                                                      uint32_t recent_success_pct,
+                                                                      uint32_t fail_streak,
+                                                                      uint32_t recent_samples,
+                                                                      uint32_t samples) {
+    uint32_t baseline_pct = success_pct;
+
+    if (recent_samples >= 3U) {
+        baseline_pct = recent_success_pct;
+    }
+    if (samples < 3U) {
+        if (fail_streak >= 2U) {
+            return DISPLAY_COMMAND_HEALTH_DEGRADED;
+        }
+        if (fail_streak >= 1U || baseline_pct < 75U) {
+            return DISPLAY_COMMAND_HEALTH_WARN;
+        }
+        return DISPLAY_COMMAND_HEALTH_OK;
+    }
+    if (fail_streak >= 2U || baseline_pct < 50U) {
+        return DISPLAY_COMMAND_HEALTH_DEGRADED;
+    }
+    if (fail_streak >= 1U || baseline_pct < 80U) {
+        return DISPLAY_COMMAND_HEALTH_WARN;
+    }
+    return DISPLAY_COMMAND_HEALTH_OK;
+}
+
+static void display_update_command_health_state(uint32_t success_pct,
+                                                uint32_t recent_success_pct,
+                                                uint32_t recent_samples,
+                                                uint32_t rate_per_min,
+                                                char tag) {
+    display_command_health_state_t prev_state =
+        (display_command_health_state_t)g_display_fb.command_health_state;
+    display_command_health_state_t next_state =
+        display_classify_command_health(success_pct,
+                                        recent_success_pct,
+                                        g_display_fb.command_fail_streak,
+                                        recent_samples,
+                                        g_display_fb.command_samples);
+    uint32_t now_ticks;
+    uint32_t recovery_ticks = 0U;
+    uint32_t prev_recovery_avg;
+    uint32_t prev_recovery_count;
+
+    if (next_state == prev_state) {
+        return;
+    }
+    now_ticks = display_ticks32();
+    display_command_health_account_dwell(now_ticks, prev_state);
+
+    if (next_state == DISPLAY_COMMAND_HEALTH_OK) {
+        if ((prev_state == DISPLAY_COMMAND_HEALTH_WARN ||
+             prev_state == DISPLAY_COMMAND_HEALTH_DEGRADED) &&
+            g_display_fb.command_health_episode_start_ticks != 0U) {
+            recovery_ticks = now_ticks - g_display_fb.command_health_episode_start_ticks;
+            if (recovery_ticks == 0U) {
+                recovery_ticks = 1U;
+            }
+            prev_recovery_avg = g_display_fb.command_health_avg_recovery_ticks;
+            prev_recovery_count = g_display_fb.command_health_recovery_count;
+            g_display_fb.command_health_last_recovery_ticks = recovery_ticks;
+            if (recovery_ticks > g_display_fb.command_health_peak_recovery_ticks) {
+                g_display_fb.command_health_peak_recovery_ticks = recovery_ticks;
+            }
+            if (prev_recovery_count == 0U) {
+                g_display_fb.command_health_avg_recovery_ticks = recovery_ticks;
+            } else {
+                g_display_fb.command_health_avg_recovery_ticks =
+                    ((prev_recovery_avg * 3U) + recovery_ticks) / 4U;
+            }
+            if (g_display_fb.command_health_recovery_count != 0xFFFFFFFFU) {
+                g_display_fb.command_health_recovery_count++;
+            }
+            KLOGI("display: cmd_health_recovery from=%s ticks=%u avg=%u peak=%u count=%u warn_dwell=%u degr_dwell=%u",
+                  display_command_health_label(prev_state),
+                  recovery_ticks,
+                  g_display_fb.command_health_avg_recovery_ticks,
+                  g_display_fb.command_health_peak_recovery_ticks,
+                  g_display_fb.command_health_recovery_count,
+                  g_display_fb.command_health_warn_dwell_ticks,
+                  g_display_fb.command_health_degr_dwell_ticks);
+        }
+        g_display_fb.command_health_episode_start_ticks = 0U;
+    } else if (prev_state == DISPLAY_COMMAND_HEALTH_OK ||
+               prev_state == DISPLAY_COMMAND_HEALTH_BOOT) {
+        g_display_fb.command_health_episode_start_ticks = now_ticks;
+    }
+
+    g_display_fb.command_health_state = (uint8_t)next_state;
+    if (g_display_fb.command_health_state_changes != 0xFFFFFFFFU) {
+        g_display_fb.command_health_state_changes++;
+    }
+    g_display_fb.command_health_state_since_ticks = now_ticks;
+
+    KLOGI("display: cmd_health_state from=%s to=%s tag=%c streak=%u success_pct=%u recent_pct=%u recent_samples=%u rate_per_min=%u samples=%u rec_last=%u",
+          display_command_health_label(prev_state),
+          display_command_health_label(next_state),
+          tag,
+          g_display_fb.command_fail_streak,
+          success_pct,
+          recent_success_pct,
+          recent_samples,
+          rate_per_min,
+          g_display_fb.command_samples,
+          g_display_fb.command_health_last_recovery_ticks);
+}
+
 static void display_framebuffer_build_footer_legend(char *legend_text, uint32_t cap) {
     uint32_t len = 0U;
     const char *cause =
         display_transition_cause_label((display_transition_cause_t)g_display_fb.transition_cause);
+    const char *health =
+        display_command_health_label((display_command_health_state_t)g_display_fb.command_health_state);
+    const char *latency_status = display_command_latency_status_label();
+    uint32_t recent_samples = 0U;
+    uint32_t recent_pct = display_command_recent_success_pct(&recent_samples);
 
     if (cap == 0U) {
         return;
     }
 
     legend_text[0] = '\0';
-    display_append_text(legend_text, &len, cap, "HUD I:IN R:RUN O:OK E:ERR C:");
+    display_append_text(legend_text, &len, cap, "HUD I/R/O/E C:");
     display_append_text(legend_text, &len, cap, cause);
+    display_append_text(legend_text, &len, cap, " H:");
+    display_append_text(legend_text, &len, cap, health);
+    display_append_text(legend_text, &len, cap, " R");
+    if (recent_samples == 0U) {
+        display_append_text(legend_text, &len, cap, "-");
+    } else {
+        display_append_u32(legend_text, &len, cap, recent_pct);
+        display_append_text(legend_text, &len, cap, "%");
+    }
+    display_append_text(legend_text, &len, cap, " X");
+    if (g_display_fb.command_health_recovery_count == 0U) {
+        display_append_text(legend_text, &len, cap, "-");
+    } else {
+        display_append_compact_u32(legend_text,
+                                   &len,
+                                   cap,
+                                   g_display_fb.command_health_last_recovery_ticks);
+    }
+    display_append_text(legend_text, &len, cap, " S:");
+    display_append_text(legend_text, &len, cap, latency_status);
+}
+
+static void display_append_compact_u32(char *dst, uint32_t *len, uint32_t cap, uint32_t value) {
+    if (value < 10000U) {
+        display_append_u32(dst, len, cap, value);
+        return;
+    }
+
+    display_append_u32(dst, len, cap, value / 1000U);
+    display_append_text(dst, len, cap, "K");
+}
+
+static uint32_t display_command_latency_budget_ticks(uint32_t avg_ticks, uint32_t samples) {
+    uint32_t hz = timer_frequency_hz();
+    uint32_t min_ticks = DISPLAY_FB_COMMAND_SLOW_MIN_TICKS;
+    uint32_t adaptive_ticks = 0U;
+
+    if (hz != 0U) {
+        uint32_t quarter_second_ticks = hz / 4U;
+        if (quarter_second_ticks > min_ticks) {
+            min_ticks = quarter_second_ticks;
+        }
+    }
+
+    if (samples >= 3U && avg_ticks != 0U) {
+        if (avg_ticks >
+            (0xFFFFFFFFU - DISPLAY_FB_COMMAND_SLOW_MARGIN_TICKS) /
+                DISPLAY_FB_COMMAND_SLOW_MULTIPLIER) {
+            adaptive_ticks = 0xFFFFFFFFU;
+        } else {
+            adaptive_ticks = (avg_ticks * DISPLAY_FB_COMMAND_SLOW_MULTIPLIER) +
+                             DISPLAY_FB_COMMAND_SLOW_MARGIN_TICKS;
+        }
+    }
+
+    if (adaptive_ticks < min_ticks) {
+        adaptive_ticks = min_ticks;
+    }
+    return adaptive_ticks;
+}
+
+static const char *display_command_latency_status_label(void) {
+    uint32_t budget_ticks =
+        display_command_latency_budget_ticks(g_display_fb.command_avg_ticks,
+                                             g_display_fb.command_samples);
+
+    if (g_display_fb.command_active != 0U) {
+        uint32_t running_ticks = display_ticks32() - g_display_fb.command_start_ticks;
+        if (running_ticks >= budget_ticks) {
+            return "RUN!";
+        }
+        return "RUN";
+    }
+    if (g_display_fb.command_samples == 0U) {
+        return "-";
+    }
+    return g_display_fb.command_last_slow != 0U ? "SLOW" : "OK";
+}
+
+static uint32_t display_command_rate_per_min(void) {
+    uint32_t hz = timer_frequency_hz();
+    uint32_t count = g_display_fb.command_finish_count;
+    uint32_t newest_idx;
+    uint32_t oldest_idx;
+    uint32_t newest_ticks;
+    uint32_t oldest_ticks;
+    uint32_t delta_ticks;
+    uint32_t per_min_base;
+    uint32_t numerator;
+
+    if (hz == 0U || count < 2U) {
+        return 0U;
+    }
+    newest_idx =
+        (g_display_fb.command_finish_head + DISPLAY_FB_COMMAND_RATE_WINDOW - 1U) %
+        DISPLAY_FB_COMMAND_RATE_WINDOW;
+    oldest_idx =
+        (g_display_fb.command_finish_head + DISPLAY_FB_COMMAND_RATE_WINDOW - count) %
+        DISPLAY_FB_COMMAND_RATE_WINDOW;
+    newest_ticks = g_display_fb.command_finish_ticks[newest_idx];
+    oldest_ticks = g_display_fb.command_finish_ticks[oldest_idx];
+    delta_ticks = newest_ticks - oldest_ticks;
+    if (delta_ticks == 0U) {
+        return 0U;
+    }
+    if (hz > (0xFFFFFFFFU / 60U)) {
+        return 0xFFFFFFFFU;
+    }
+    per_min_base = hz * 60U;
+    if ((count - 1U) > (0xFFFFFFFFU / per_min_base)) {
+        numerator = 0xFFFFFFFFU;
+    } else {
+        numerator = (count - 1U) * per_min_base;
+    }
+    return (numerator + (delta_ticks / 2U)) / delta_ticks;
+}
+
+static void display_command_recent_push(int success) {
+    g_display_fb.command_recent_outcomes[g_display_fb.command_recent_head] = success != 0 ? 1U : 0U;
+    g_display_fb.command_recent_head =
+        (g_display_fb.command_recent_head + 1U) % DISPLAY_FB_COMMAND_RATE_WINDOW;
+    if (g_display_fb.command_recent_count < DISPLAY_FB_COMMAND_RATE_WINDOW) {
+        g_display_fb.command_recent_count++;
+    }
+}
+
+static uint32_t display_command_recent_success_pct(uint32_t *out_samples) {
+    uint32_t count = g_display_fb.command_recent_count;
+    uint32_t ok = 0U;
+
+    if (out_samples) {
+        *out_samples = count;
+    }
+    if (count == 0U) {
+        return 0U;
+    }
+
+    for (uint32_t i = 0U; i < count; i++) {
+        uint32_t idx =
+            (g_display_fb.command_recent_head + DISPLAY_FB_COMMAND_RATE_WINDOW - count + i) %
+            DISPLAY_FB_COMMAND_RATE_WINDOW;
+        if (g_display_fb.command_recent_outcomes[idx] != 0U) {
+            ok++;
+        }
+    }
+    return (ok * 100U) / count;
+}
+
+static void display_command_health_account_dwell(uint32_t now_ticks,
+                                                 display_command_health_state_t state) {
+    uint32_t since = g_display_fb.command_health_state_since_ticks;
+    uint32_t delta;
+
+    if (since == 0U) {
+        return;
+    }
+    delta = now_ticks - since;
+    if (delta == 0U) {
+        return;
+    }
+    if (state == DISPLAY_COMMAND_HEALTH_WARN) {
+        if (g_display_fb.command_health_warn_dwell_ticks > 0xFFFFFFFFU - delta) {
+            g_display_fb.command_health_warn_dwell_ticks = 0xFFFFFFFFU;
+        } else {
+            g_display_fb.command_health_warn_dwell_ticks += delta;
+        }
+    } else if (state == DISPLAY_COMMAND_HEALTH_DEGRADED) {
+        if (g_display_fb.command_health_degr_dwell_ticks > 0xFFFFFFFFU - delta) {
+            g_display_fb.command_health_degr_dwell_ticks = 0xFFFFFFFFU;
+        } else {
+            g_display_fb.command_health_degr_dwell_ticks += delta;
+        }
+    }
+}
+
+static void display_framebuffer_build_footer_latency(char *latency_text, uint32_t cap) {
+    uint32_t len = 0U;
+    uint32_t budget_ticks = g_display_fb.command_last_budget_ticks;
+
+    if (budget_ticks == 0U || g_display_fb.command_active != 0U) {
+        budget_ticks = display_command_latency_budget_ticks(g_display_fb.command_avg_ticks,
+                                                            g_display_fb.command_samples);
+    }
+
+    if (cap == 0U) {
+        return;
+    }
+    latency_text[0] = '\0';
+
+    display_append_text(latency_text, &len, cap, "T ");
+    if (g_display_fb.command_samples == 0U) {
+        display_append_text(latency_text, &len, cap, "L- A- P- B- O-");
+    } else {
+        display_append_text(latency_text, &len, cap, "L");
+        display_append_compact_u32(latency_text, &len, cap, g_display_fb.command_last_ticks);
+        display_append_text(latency_text, &len, cap, " A");
+        display_append_compact_u32(latency_text, &len, cap, g_display_fb.command_avg_ticks);
+        display_append_text(latency_text, &len, cap, " P");
+        display_append_compact_u32(latency_text, &len, cap, g_display_fb.command_peak_ticks);
+        display_append_text(latency_text, &len, cap, " B");
+        display_append_compact_u32(latency_text, &len, cap, budget_ticks);
+        display_append_text(latency_text, &len, cap, " O");
+        display_append_text(latency_text,
+                            &len,
+                            cap,
+                            g_display_fb.command_last_success != 0U ? "OK" : "ER");
+    }
+
+    if (g_display_fb.command_active != 0U) {
+        uint32_t running_ticks = display_ticks32() - g_display_fb.command_start_ticks;
+        display_append_text(latency_text, &len, cap, " R");
+        display_append_compact_u32(latency_text, &len, cap, running_ticks);
+    }
+    display_append_text(latency_text, &len, cap, " X");
+    if (g_display_fb.command_health_recovery_count == 0U) {
+        display_append_text(latency_text, &len, cap, "-");
+    } else {
+        display_append_compact_u32(latency_text,
+                                   &len,
+                                   cap,
+                                   g_display_fb.command_health_last_recovery_ticks);
+    }
 }
 
 static uint32_t display_string_length(const char *text) {
@@ -856,7 +1337,16 @@ static void display_timeline_push_event(display_timeline_event_t event,
 static void display_timeline_finish_active(int success, display_transition_cause_t cause) {
     uint32_t now_ticks;
     uint32_t duration_ticks;
+    uint32_t budget_ticks;
+    uint32_t prev_avg_ticks;
+    uint32_t sample_count;
+    uint32_t success_pct = 0U;
+    uint32_t recent_success_pct = 0U;
+    uint32_t recent_samples = 0U;
+    uint32_t rate_per_min;
+    uint32_t total_commands;
     char tag;
+    int latency_slow;
 
     if (g_display_fb.command_active == 0U) {
         return;
@@ -870,6 +1360,110 @@ static void display_timeline_finish_active(int success, display_transition_cause
     display_timeline_push_event(success ? DISPLAY_TIMELINE_EVENT_OK : DISPLAY_TIMELINE_EVENT_FAIL,
                                 duration_ticks,
                                 tag);
+
+    prev_avg_ticks = g_display_fb.command_avg_ticks;
+    sample_count = g_display_fb.command_samples;
+    budget_ticks = display_command_latency_budget_ticks(prev_avg_ticks, sample_count);
+    latency_slow = duration_ticks >= budget_ticks;
+    g_display_fb.command_last_ticks = duration_ticks;
+    g_display_fb.command_last_success = success != 0U ? 1U : 0U;
+    g_display_fb.command_last_slow = latency_slow != 0 ? 1U : 0U;
+    g_display_fb.command_last_budget_ticks = budget_ticks;
+    if (duration_ticks > g_display_fb.command_peak_ticks) {
+        g_display_fb.command_peak_ticks = duration_ticks;
+    }
+    if (sample_count == 0U) {
+        g_display_fb.command_avg_ticks = duration_ticks;
+    } else {
+        g_display_fb.command_avg_ticks = ((prev_avg_ticks * 3U) + duration_ticks) / 4U;
+    }
+    if (g_display_fb.command_samples != 0xFFFFFFFFU) {
+        g_display_fb.command_samples++;
+    }
+    if (success != 0) {
+        if (g_display_fb.command_ok_count != 0xFFFFFFFFU) {
+            g_display_fb.command_ok_count++;
+        }
+        g_display_fb.command_fail_streak = 0U;
+    } else {
+        if (g_display_fb.command_fail_count != 0xFFFFFFFFU) {
+            g_display_fb.command_fail_count++;
+        }
+        if (g_display_fb.command_fail_streak != 0xFFFFFFFFU) {
+            g_display_fb.command_fail_streak++;
+        }
+        if (g_display_fb.command_fail_streak > g_display_fb.command_fail_streak_peak) {
+            g_display_fb.command_fail_streak_peak = g_display_fb.command_fail_streak;
+        }
+    }
+    if (latency_slow != 0) {
+        if (g_display_fb.command_slow_count != 0xFFFFFFFFU) {
+            g_display_fb.command_slow_count++;
+        }
+        if (g_display_fb.command_slow_streak != 0xFFFFFFFFU) {
+            g_display_fb.command_slow_streak++;
+        }
+        if (g_display_fb.command_slow_streak > g_display_fb.command_slow_streak_peak) {
+            g_display_fb.command_slow_streak_peak = g_display_fb.command_slow_streak;
+        }
+    } else {
+        g_display_fb.command_slow_streak = 0U;
+    }
+    g_display_fb.command_finish_ticks[g_display_fb.command_finish_head] = now_ticks;
+    g_display_fb.command_finish_head =
+        (g_display_fb.command_finish_head + 1U) % DISPLAY_FB_COMMAND_RATE_WINDOW;
+    if (g_display_fb.command_finish_count < DISPLAY_FB_COMMAND_RATE_WINDOW) {
+        g_display_fb.command_finish_count++;
+    }
+    display_command_recent_push(success);
+    recent_success_pct = display_command_recent_success_pct(&recent_samples);
+    rate_per_min = display_command_rate_per_min();
+    total_commands = g_display_fb.command_ok_count + g_display_fb.command_fail_count;
+    if (total_commands != 0U) {
+        if (total_commands < 100U) {
+            success_pct = (g_display_fb.command_ok_count * 100U) / total_commands;
+        } else {
+            success_pct = g_display_fb.command_ok_count / (total_commands / 100U);
+            if (success_pct > 100U) {
+                success_pct = 100U;
+            }
+        }
+    }
+    display_update_command_health_state(success_pct,
+                                        recent_success_pct,
+                                        recent_samples,
+                                        rate_per_min,
+                                        tag);
+
+    KLOGI("display: cmd_latency tag=%c ticks=%u avg=%u peak=%u samples=%u outcome=%s cause=%s",
+          tag,
+          duration_ticks,
+          g_display_fb.command_avg_ticks,
+          g_display_fb.command_peak_ticks,
+          g_display_fb.command_samples,
+          success != 0 ? "ok" : "fail",
+          display_transition_cause_label(cause));
+    KLOGI("display: cmd_latency_budget tag=%c ticks=%u budget=%u slow=%u slow_count=%u slow_streak=%u peak_slow_streak=%u",
+          tag,
+          duration_ticks,
+          budget_ticks,
+          latency_slow != 0 ? 1U : 0U,
+          g_display_fb.command_slow_count,
+          g_display_fb.command_slow_streak,
+          g_display_fb.command_slow_streak_peak);
+    KLOGI("display: cmd_health tag=%c ok=%u fail=%u streak=%u peak_streak=%u success_pct=%u rate_per_min=%u",
+          tag,
+          g_display_fb.command_ok_count,
+          g_display_fb.command_fail_count,
+          g_display_fb.command_fail_streak,
+          g_display_fb.command_fail_streak_peak,
+          success_pct,
+          rate_per_min);
+    KLOGI("display: cmd_health_window tag=%c recent_pct=%u recent_samples=%u",
+          tag,
+          recent_success_pct,
+          recent_samples);
+
     g_display_fb.command_active = 0U;
     g_display_fb.command_tag = '?';
     g_display_fb.transition_cause = (uint8_t)cause;
@@ -984,19 +1578,11 @@ static uint32_t display_scale_channel(uint8_t value, uint8_t mask_size) {
 static int display_framebuffer_bootstrap_font_pixel_on(const uint8_t *rows,
                                                        uint32_t row,
                                                        uint32_t col) {
-    uint32_t src_row =
-        (((row * 2U) + 1U) * DISPLAY_FB_FONT_SRC_H) / (DISPLAY_FB_GLYPH_H * 2U);
-    uint32_t src_col =
-        (((col * 2U) + 1U) * DISPLAY_FB_FONT_SRC_W) / (DISPLAY_FB_GLYPH_W * 2U);
-
-    if (src_row >= DISPLAY_FB_FONT_SRC_H) {
-        src_row = DISPLAY_FB_FONT_SRC_H - 1U;
-    }
-    if (src_col >= DISPLAY_FB_FONT_SRC_W) {
-        src_col = DISPLAY_FB_FONT_SRC_W - 1U;
+    if (row >= DISPLAY_FB_FONT_SRC_H || col >= DISPLAY_FB_FONT_SRC_W) {
+        return 0;
     }
 
-    return (rows[src_row] & (1U << (DISPLAY_FB_FONT_SRC_W - 1U - src_col))) != 0U;
+    return (rows[row] & (1U << (DISPLAY_FB_FONT_SRC_W - 1U - col))) != 0U;
 }
 
 static uint32_t display_framebuffer_pack_rgb(uint8_t r, uint8_t g, uint8_t b) {
@@ -1142,11 +1728,22 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
     uint32_t len = 0U;
     uint32_t hz = timer_frequency_hz();
     uint32_t seconds = 0U;
+    uint32_t rate_per_min = display_command_rate_per_min();
+    uint32_t budget_ticks = g_display_fb.command_last_budget_ticks;
+    const char *health_label =
+        display_command_health_label((display_command_health_state_t)g_display_fb.command_health_state);
+    uint32_t recent_samples = 0U;
+    uint32_t recent_pct = display_command_recent_success_pct(&recent_samples);
 
     if (cap == 0U) {
         return;
     }
     metrics_text[0] = '\0';
+
+    if (budget_ticks == 0U || g_display_fb.command_active != 0U) {
+        budget_ticks = display_command_latency_budget_ticks(g_display_fb.command_avg_ticks,
+                                                            g_display_fb.command_samples);
+    }
 
     pmm_get_stats(&pmm_stats);
     if (hz != 0U) {
@@ -1162,6 +1759,41 @@ static void display_framebuffer_build_header_metrics(char *metrics_text, uint32_
     display_append_mib_value(metrics_text, &len, cap, pmm_stats.free_frames);
     display_append_text(metrics_text, &len, cap, "/");
     display_append_mib_value(metrics_text, &len, cap, pmm_stats.total_frames);
+    display_append_text(metrics_text, &len, cap, "  CMD ");
+    if (g_display_fb.command_samples == 0U) {
+        display_append_text(metrics_text, &len, cap, "O-/E- S- Q- R- L- B- X- H-");
+    } else {
+        display_append_text(metrics_text, &len, cap, "O");
+        display_append_compact_u32(metrics_text, &len, cap, g_display_fb.command_ok_count);
+        display_append_text(metrics_text, &len, cap, "/E");
+        display_append_compact_u32(metrics_text, &len, cap, g_display_fb.command_fail_count);
+        display_append_text(metrics_text, &len, cap, " S");
+        display_append_compact_u32(metrics_text, &len, cap, g_display_fb.command_fail_streak);
+        display_append_text(metrics_text, &len, cap, " Q");
+        display_append_compact_u32(metrics_text, &len, cap, rate_per_min);
+        display_append_text(metrics_text, &len, cap, " R");
+        if (recent_samples == 0U) {
+            display_append_text(metrics_text, &len, cap, "-");
+        } else {
+            display_append_u32(metrics_text, &len, cap, recent_pct);
+            display_append_text(metrics_text, &len, cap, "%");
+        }
+        display_append_text(metrics_text, &len, cap, " L");
+        display_append_compact_u32(metrics_text, &len, cap, g_display_fb.command_slow_count);
+        display_append_text(metrics_text, &len, cap, " B");
+        display_append_compact_u32(metrics_text, &len, cap, budget_ticks);
+        display_append_text(metrics_text, &len, cap, " X");
+        if (g_display_fb.command_health_recovery_count == 0U) {
+            display_append_text(metrics_text, &len, cap, "-");
+        } else {
+            display_append_compact_u32(metrics_text,
+                                       &len,
+                                       cap,
+                                       g_display_fb.command_health_last_recovery_ticks);
+        }
+        display_append_text(metrics_text, &len, cap, " H");
+        display_append_text(metrics_text, &len, cap, health_label);
+    }
 }
 
 static void display_framebuffer_draw_header_metrics(void) {
@@ -1208,7 +1840,8 @@ static void display_framebuffer_draw_footer_hud(void) {
     uint32_t visible_finished;
     uint32_t slots_taken;
     uint32_t active_slots = g_display_fb.command_active != 0U ? 1U : 0U;
-    char legend_text[40];
+    char legend_text[80];
+    char latency_text[40];
 
     display_framebuffer_fill_rect_packed(
         0U,
@@ -1217,6 +1850,18 @@ static void display_framebuffer_draw_footer_hud(void) {
         DISPLAY_FB_CHAR_H,
         footer_bg);
     display_framebuffer_build_footer_legend(legend_text, sizeof(legend_text));
+    display_framebuffer_build_footer_latency(latency_text, sizeof(latency_text));
+    if (latency_text[0] != '\0') {
+        uint32_t legend_len = 0U;
+        while (legend_text[legend_len] != '\0' && legend_len + 1U < sizeof(legend_text)) {
+            legend_len++;
+        }
+        if (legend_len + 2U < sizeof(legend_text)) {
+            legend_text[legend_len++] = ' ';
+            legend_text[legend_len] = '\0';
+            display_append_text(legend_text, &legend_len, (uint32_t)sizeof(legend_text), latency_text);
+        }
+    }
     display_framebuffer_draw_text_packed(
         DISPLAY_FB_CHAR_W,
         footer_top + 1U,
@@ -1546,6 +2191,12 @@ void display_init(void) {
     g_display_fb.command_active = 0U;
     g_display_fb.command_start_ticks = 0U;
     g_display_fb.command_tag = '?';
+    g_display_fb.command_last_ticks = 0U;
+    g_display_fb.command_avg_ticks = 0U;
+    g_display_fb.command_peak_ticks = 0U;
+    g_display_fb.command_samples = 0U;
+    g_display_fb.command_last_success = 0U;
+    display_reset_command_health();
     g_display_fb.prompt_hint = DISPLAY_PROMPT_HINT_INPUT;
     g_display_fb.prompt_hint_until_ticks = 0U;
     g_display_fb.prompt_hint_tag = '?';
@@ -1661,6 +2312,12 @@ void display_late_init(void) {
     g_display_fb.command_active = 0U;
     g_display_fb.command_start_ticks = 0U;
     g_display_fb.command_tag = '?';
+    g_display_fb.command_last_ticks = 0U;
+    g_display_fb.command_avg_ticks = 0U;
+    g_display_fb.command_peak_ticks = 0U;
+    g_display_fb.command_samples = 0U;
+    g_display_fb.command_last_success = 0U;
+    display_reset_command_health();
     g_display_fb.prompt_hint = DISPLAY_PROMPT_HINT_INPUT;
     g_display_fb.prompt_hint_until_ticks = 0U;
     g_display_fb.prompt_hint_tag = '?';
@@ -1679,7 +2336,7 @@ void display_late_init(void) {
           info.height,
           info.pitch,
           (uint32_t)info.bpp);
-    KLOGI("display: gui_state_hash=%x profile=fb-shell-v4", gui_hash);
+    KLOGI("display: gui_state_hash=%x profile=fb-shell-v5", gui_hash);
 }
 
 uint32_t display_console_enter_critical(void) {

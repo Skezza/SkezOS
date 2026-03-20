@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$#" -lt 3 ]; then
-    echo "usage: $0 <iso> <output_ppm> <qemu_log> [boot_wait_secs] [qmp_port]" >&2
+    echo "usage: $0 <iso> <output_ppm> <qemu_log> [boot_wait_secs] [qmp_port] [artifact_label]" >&2
     exit 2
 fi
 
@@ -14,9 +14,10 @@ QMP_PORT="${5:-45557}"
 QEMU_BIN="${QEMU:-qemu-system-i386}"
 META_PATH="${OUTPUT_PPM%.ppm}.meta"
 ARTIFACT_DIR="$(dirname "$OUTPUT_PPM")"
-LATEST_PPM_PATH="${ARTIFACT_DIR}/gui-fb-failure-latest.ppm"
-LATEST_META_PATH="${ARTIFACT_DIR}/gui-fb-failure-latest.meta"
-LATEST_QEMU_LOG_PATH="${ARTIFACT_DIR}/gui-fb-failure-latest.qemu.log"
+ARTIFACT_LABEL="${6:-failure}"
+LATEST_PPM_PATH="${ARTIFACT_DIR}/gui-fb-${ARTIFACT_LABEL}-latest.ppm"
+LATEST_META_PATH="${ARTIFACT_DIR}/gui-fb-${ARTIFACT_LABEL}-latest.meta"
+LATEST_QEMU_LOG_PATH="${ARTIFACT_DIR}/gui-fb-${ARTIFACT_LABEL}-latest.qemu.log"
 
 if [ ! -f "$ISO_PATH" ]; then
     echo "[capture-qemu-fb-dump] missing iso: $ISO_PATH" >&2
@@ -110,6 +111,7 @@ qemu_log_path=$QEMU_LOG
 latest_ppm_path=$LATEST_PPM_PATH
 latest_meta_path=$LATEST_META_PATH
 latest_qemu_log_path=$LATEST_QEMU_LOG_PATH
+artifact_label=$ARTIFACT_LABEL
 qmp_port=$QMP_PORT
 boot_wait_secs=$BOOT_WAIT_SECS
 size_bytes=$size_bytes

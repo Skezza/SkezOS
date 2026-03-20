@@ -63,10 +63,16 @@ enum {
     SYS_PIPE = 18, /* Create an anonymous pipe and return read/write FDs. */
     SYS_DUP = 19, /* Duplicate an open FD to the lowest available dynamic slot. */
     SYS_DUP2 = 20, /* Duplicate an open FD into a specific target descriptor. */
+    SYS_UNLINK = 21, /* Remove a filesystem entry by path. */
+    SYS_FORK = 22, /* Clone current user task and return 0 in child / pid in parent. */
 };
 
 enum {
     SYSCALL_SPAWN_FLAG_INHERIT_FDS = (1U << 0),
+};
+
+enum {
+    SYSCALL_WAITPID_FLAG_NOHANG = (1U << 0),
 };
 
 enum {

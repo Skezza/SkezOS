@@ -16,6 +16,10 @@
 #include "timer.h"
 #include "sched.h"
 #include "syscall.h"
+#include "ata_pio.h"
+#include "block_cache.h"
+#include "block_device.h"
+#include "persistfs.h"
 #include "tarfs.h"
 #include "usermode.h"
 #include "vfs.h"
@@ -197,6 +201,18 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     display_late_init();
     vfs_init();
     KASSERT(tarfs_mount_demo_archive() == 0);
+    if (ata_pio_init() == 0) {
+        struct block_device *storage_dev = ata_pio_primary_master_device();
+        if (storage_dev && block_cache_bind_device(storage_dev) == 0) {
+            if (persistfs_mount() < 0) {
+                KLOGW("storage: persistfs mount failed; continuing without /persist");
+            }
+        } else {
+            KLOGW("storage: block cache bind failed; continuing without /persist");
+        }
+    } else {
+        KLOGW("storage: ATA not available; continuing without /persist");
+    }
 
     // Install default interrupt handlers and remap the PIC
     interrupts_install();

@@ -30,6 +30,6 @@ int usermode_spawn_path_task_ex(const char *path,
                                 uint32_t spawn_flags);
 
 /* Scheduler callback used to release bootstrap spawn slots on task reap. */
-void usermode_notify_task_reaped(const char *task_name);
+void usermode_notify_task_reaped(int pid);
 
 #endif /* USERMODE_H */

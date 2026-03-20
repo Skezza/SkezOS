@@ -29,13 +29,22 @@ RELIABILITY_REPLAY_RUNNER_SETTLE_SECS ?= 1.50
 RELIABILITY_FUZZ_RUNNER_SETTLE_SECS ?= 2.25
 NIGHTLY_GUI_TRIAGE_BOOT_WAIT_SECS ?= 16
 NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR ?= $(BUILD)/artifacts
+GUI_VISUAL_BASELINE_BOOT_WAIT_SECS ?= 16
+GUI_VISUAL_BASELINE_ARTIFACT_DIR ?= $(BUILD)/artifacts
+GUI_VISUAL_BASELINE_HASH_FB_SHELL_V5 ?= 0x1BD7880D
 SMOKE_MARKER = SKEZOS_SMOKE_READY
 RELIABILITY_JSON_VALIDATOR = ./scripts/validate_reliability_json.sh
 RELIABILITY_JSON_REPORTER = ./scripts/reliability_json_report.sh
 REPLAY_HASH_ALL_SEED1337 ?= 2002305826
 REPLAY_HASH_QUICK_SEED1337 ?= 2923080070
-GUI_STATE_HASH_FB_SHELL_V4 ?= 0xD9BFAA54
+GUI_STATE_HASH_FB_SHELL_V5 ?= 0x9A4C1DA5
 PHASE4_REPEAT ?= 3
+STORAGE_DISK_SIZE_MB ?= 16
+STORAGE_RUN_DISK = $(BUILD)/storage-run.img
+STORAGE_INTEGRITY_DISK = $(BUILD)/storage-integrity.img
+STORAGE_PERSIST_DISK = $(BUILD)/storage-persist.img
+STORAGE_REPLAY_DISK = $(BUILD)/storage-replay.img
+SHELL_HISTORY_PERSIST_DISK = $(BUILD)/storage-shell-history-persist.img
 USERLAND_BUILD = $(BUILD)/userland
 INITRAMFS_STAGING = $(BUILD)/initramfs_root
 INITRAMFS_TAR = $(BUILD)/initramfs_demo.tar
@@ -64,7 +73,9 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/pwd_slot12.o \
 	$(USERLAND_BUILD)/ls_slot13.o \
 	$(USERLAND_BUILD)/busybox_slot14.o \
-	$(USERLAND_BUILD)/reliability_runner_slot15.o
+	$(USERLAND_BUILD)/reliability_runner_slot15.o \
+	$(USERLAND_BUILD)/rm_slot16.o \
+	$(USERLAND_BUILD)/forktest_slot17.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -82,9 +93,11 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/pwd.elf \
 	$(USERLAND_BUILD)/ls.elf \
 	$(USERLAND_BUILD)/busybox.elf \
-	$(USERLAND_BUILD)/reliability_runner.elf
+	$(USERLAND_BUILD)/reliability_runner.elf \
+	$(USERLAND_BUILD)/rm.elf \
+	$(USERLAND_BUILD)/forktest.elf
 
-.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-fb-dump check check-pr check-release check-nightly
+.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-fb-dump qemu-smoke-gui-visual-baseline qemu-smoke-gui-visual-baseline-refresh qemu-smoke-storage-integrity qemu-smoke-storage-persist qemu-smoke-storage-replay qemu-smoke-shell-history-persist qemu-smoke-fork-cow qemu-smoke-fork-cow-stress qemu-smoke-fork-cow-pressure qemu-smoke-shell-bg-replay check check-pr check-release check-nightly
 
 all: $(ISO)
 
@@ -160,6 +173,12 @@ $(USERLAND_BUILD)/busybox.elf: $(USERLAND_BUILD)/busybox_slot14.o
 $(USERLAND_BUILD)/reliability_runner.elf: $(USERLAND_BUILD)/reliability_runner_slot15.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01511000 -o $@ $<
 
+$(USERLAND_BUILD)/rm.elf: $(USERLAND_BUILD)/rm_slot16.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01522000 -o $@ $<
+
+$(USERLAND_BUILD)/forktest.elf: $(USERLAND_BUILD)/forktest_slot17.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01533000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -179,6 +198,8 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/ls.elf $(INITRAMFS_STAGING)/bin/ls.elf
 	cp $(USERLAND_BUILD)/busybox.elf $(INITRAMFS_STAGING)/bin/busybox.elf
 	cp $(USERLAND_BUILD)/reliability_runner.elf $(INITRAMFS_STAGING)/bin/reliability_runner.elf
+	cp $(USERLAND_BUILD)/rm.elf $(INITRAMFS_STAGING)/bin/rm.elf
+	cp $(USERLAND_BUILD)/forktest.elf $(INITRAMFS_STAGING)/bin/forktest.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -193,18 +214,19 @@ $(ISO): $(BUILD)/kernel.elf iso/boot/grub/grub.cfg
 	cp $(BUILD)/kernel.elf iso/boot/kernel.elf
 	grub-mkrescue -o $(ISO) iso > /dev/null 2>&1
 
-run: $(ISO)
+run: $(ISO) $(STORAGE_RUN_DISK)
 	# Runs QEMU with graphical UI (GTK) and forward COM1 to this terminal.
 	# Using "mon:stdio" keeps stdin input reliable when piped input at launch.
 	$(QEMU) \
 		-cdrom $(ISO) \
+		-drive file=$(STORAGE_RUN_DISK),format=raw,if=ide,index=0,media=disk \
 		-display gtk \
 		-serial mon:stdio \
 		-monitor none \
 
 toolchain-check:
 	@missing=0; \
-	for tool in $(CC) $(AS) $(LD) grub-mkrescue xorriso $(QEMU) timeout tar od; do \
+	for tool in $(CC) $(AS) $(LD) grub-mkrescue xorriso $(QEMU) timeout tar od dd; do \
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Missing required tool: $$tool"; \
 			missing=1; \
@@ -214,6 +236,11 @@ toolchain-check:
 		echo "Install missing tools and rerun."; \
 		exit 1; \
 	fi
+
+$(BUILD)/storage-%.img:
+	@mkdir -p $(BUILD)
+	@rm -f $@
+	@dd if=/dev/zero of=$@ bs=1M count=$(STORAGE_DISK_SIZE_MB) status=none
 
 qemu-smoke: $(ISO)
 	@mkdir -p $(BUILD)
@@ -475,13 +502,85 @@ printf 'ps\n'; \
 sleep 0.25; \
 printf 'echo shell core interactive echo\n'; \
 sleep 0.25; \
+printf '\022\n'; \
+sleep 0.25; \
+printf 'echo recall-target\n'; \
+sleep 0.25; \
+printf '!!\n'; \
+sleep 0.25; \
+printf '!echo\n'; \
+sleep 0.25; \
+printf '!?target\n'; \
+sleep 0.25; \
+printf '^target^target2^\n'; \
+sleep 0.25; \
+printf 'echo pref-one\n'; \
+sleep 0.25; \
+printf 'echo pref-two\n'; \
+sleep 0.25; \
+printf 'echo pref\033\n'; \
+sleep 0.25; \
+printf 'history clear\n'; \
+sleep 0.25; \
+printf 'echo run-target\n'; \
+sleep 0.25; \
+printf 'echo run-other\n'; \
+sleep 0.25; \
+printf 'history run 1\n'; \
+sleep 0.25; \
+printf 'echo nope\025echo ctrlu-ok\n'; \
+sleep 0.25; \
+printf 'echo alpha beta\027gamma\n'; \
+sleep 0.25; \
 printf 'his\t\n'; \
 sleep 0.25; \
 printf 'cat readme.txt\n'; \
 sleep 0.25; \
-printf 'missing\n'; \
+printf 'echo "spaced arg"\n'; \
 sleep 0.25; \
-printf 'exit\n';
+printf 'echo escaped\\ space\n'; \
+sleep 0.25; \
+printf 'echo "x|y"\n'; \
+sleep 0.25; \
+printf 'echo "a>b"\n'; \
+sleep 0.25; \
+printf 'echo quoted-redir > "/qfile.txt"\n'; \
+sleep 0.25; \
+printf 'cat "/qfile.txt"\n'; \
+sleep 0.25; \
+printf 'rm "/qfile.txt"\n'; \
+sleep 0.25; \
+	printf 'sleep 80 | cat &\n'; \
+	sleep 0.25; \
+	printf 'echo bg-foreground\n'; \
+	sleep 0.20; \
+	printf 'wait\n'; \
+	sleep 0.20; \
+	printf 'echo wait-active-done\n'; \
+	sleep 0.20; \
+	printf 'wait\n'; \
+	sleep 0.20; \
+	printf 'sleep 120 &\n'; \
+	sleep 0.10; \
+	printf 'sleep 120 &\n'; \
+	sleep 0.10; \
+	printf 'sleep 120 &\n'; \
+	sleep 0.10; \
+	printf 'wait\n'; \
+	sleep 0.20; \
+	printf 'echo bg-overflow-checked\n'; \
+	sleep 0.25; \
+	printf 'missing\n'; \
+	sleep 0.25; \
+	printf 'echo recovery-ok-1\n'; \
+	sleep 0.20; \
+	printf 'echo recovery-ok-2\n'; \
+	sleep 0.20; \
+	printf 'echo recovery-ok-3\n'; \
+	sleep 0.20; \
+	printf 'echo recovery-ok-4\n'; \
+	sleep 0.20; \
+	printf 'exit\n';
 endef
 
 define RELIABILITY_SMOKE_SCRIPT
@@ -499,7 +598,7 @@ printf 'sleep 2\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo pipeline smoke | cat\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
-printf 'cat < readme.txt | cat\n'; \
+printf 'cat < readme.txt | ./busybox cat\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo drop-me > /dev/null\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
@@ -510,6 +609,8 @@ sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'cat /reliability.txt\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'echo should-fail > /bin/readme.txt\n'; \
+sleep $(RELIABILITY_SMOKE_STEP_SECS); \
+printf '/bin/pwd | cat\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
 printf 'pwd | cat\n'; \
 sleep $(RELIABILITY_SMOKE_STEP_SECS); \
@@ -538,6 +639,25 @@ if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
 fi
 endef
 
+define RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK
+@rc=0; \
+{ sleep 12; \
+$(4) \
+} | \
+timeout -s INT -k 2s $(SHELL_SMOKE_TIMEOUT_SECS)s $(QEMU) \
+	-cdrom $(ISO) \
+	-drive file=$(3),format=raw,if=ide,index=0,media=disk \
+	-display none \
+	-serial mon:stdio \
+	-monitor none \
+	-no-reboot \
+	-no-shutdown > $(2) 2>&1 || rc=$$?; \
+if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
+	echo "[$(1)] QEMU failed (exit $$rc)."; \
+	exit $$rc; \
+fi
+endef
+
 define ASSERT_SHELL_BOOT_READY
 @if ! grep -Fq "$(SMOKE_MARKER)" $(2); then \
 	echo "[$(1)] Missing readiness marker: $(SMOKE_MARKER)"; \
@@ -553,7 +673,7 @@ endef
 
 define ASSERT_GUI_HASH_IF_FB
 @if grep -Fq "display: framebuffer console active" $(2); then \
-	if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V4) profile=fb-shell-v4" $(2); then \
+	if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V5) profile=fb-shell-v5" $(2); then \
 		echo "[$(1)] Missing or changed framebuffer GUI state hash"; \
 		tail -n 220 $(2); \
 		exit 1; \
@@ -618,13 +738,138 @@ qemu-smoke-shell-core: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "spaced arg"; then \
+		echo "[qemu-smoke-shell-core] Missing quoted-arg whitespace output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "escaped space"; then \
+		echo "[qemu-smoke-shell-core] Missing escaped-space argv output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "x|y"; then \
+		echo "[qemu-smoke-shell-core] Missing quoted pipe-literal output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "a>b"; then \
+		echo "[qemu-smoke-shell-core] Missing quoted redirect-literal output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "quoted-redir"; then \
+		echo "[qemu-smoke-shell-core] Missing quoted redirect-path output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "bg-foreground"; then \
+		echo "[qemu-smoke-shell-core] Missing foreground responsiveness marker after bg launch"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "wait-active-done"; then \
+		echo "[qemu-smoke-shell-core] Missing blocking wait completion marker"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'wait: no background jobs' $(BUILD)/qemu-smoke-shell-core.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-shell-core] Missing wait no-job marker"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "bg: started job=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing background launch marker"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "bg: done job=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing background completion marker"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "bg: overflow cmd=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing background overflow marker"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "bg-overflow-checked"; then \
+		echo "[qemu-smoke-shell-core] Missing background overflow completion marker"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "search: * -> echo shell core interactive echo" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing Ctrl+R reverse-search hint output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "history: !! -> echo recall-target" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing history event recall hint output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "history: !echo -> echo recall-target" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing history prefix-recall hint output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "history: !?target -> echo recall-target" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing history contains-recall hint output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "history: ^target^target2^ -> echo recall-target2" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing history substitution hint output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'recall-target' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing history event recall command output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "recall-target2"; then \
+		echo "[qemu-smoke-shell-core] Missing history substitution command output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'pref-two' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing prefix-filter history browse replay output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "history: run 1 -> echo run-target" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing history run replay hint output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxc 'run-target')" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing history run replay command output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "ctrlu-ok"; then \
+		echo "[qemu-smoke-shell-core] Missing Ctrl+U line-kill edit output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "alpha gamma"; then \
+		echo "[qemu-smoke-shell-core] Missing Ctrl+W word-kill edit output"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
 	@if ! grep -Fq "SkezOS tarfs demo" $(BUILD)/qemu-smoke-shell-core.log; then \
 		echo "[qemu-smoke-shell-core] Missing cat output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fc 'run: launch failed' $(BUILD)/qemu-smoke-shell-core.log)" -ne 1 ]; then \
-		echo "[qemu-smoke-shell-core] Unexpected unknown-command failure count"; \
+	@if [ "$$(grep -Fc 'run: launch failed' $(BUILD)/qemu-smoke-shell-core.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-shell-core] Missing launch failure marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "open failed path=/bin/missing.elf" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing unknown-command failure path marker"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
@@ -635,6 +880,36 @@ qemu-smoke-shell-core: $(ISO)
 	fi
 	@if ! grep -Fq "sys_waitpid: parent_pid=" $(BUILD)/qemu-smoke-shell-core.log || ! grep -Fq "task=user-shell waited_pid=" $(BUILD)/qemu-smoke-shell-core.log; then \
 		echo "[qemu-smoke-shell-core] Missing user-shell waitpid log"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'display: cmd_latency tag=' $(BUILD)/qemu-smoke-shell-core.log)" -lt 3 ]; then \
+		echo "[qemu-smoke-shell-core] Missing display command-latency telemetry logs"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'display: cmd_latency_budget tag=' $(BUILD)/qemu-smoke-shell-core.log)" -lt 3 ]; then \
+		echo "[qemu-smoke-shell-core] Missing display latency-budget telemetry logs"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'display: cmd_health tag=' $(BUILD)/qemu-smoke-shell-core.log)" -lt 3 ]; then \
+		echo "[qemu-smoke-shell-core] Missing display command-health telemetry logs"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'display: cmd_health_state from=' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing display command-health state transitions"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'display: cmd_health_window tag=' $(BUILD)/qemu-smoke-shell-core.log)" -lt 3 ]; then \
+		echo "[qemu-smoke-shell-core] Missing display command-health rolling-window logs"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'display: cmd_health_recovery from=' $(BUILD)/qemu-smoke-shell-core.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-shell-core] Missing display command-health recovery logs"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
@@ -810,8 +1085,13 @@ qemu-smoke-reliability: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "diag: waitpid options notsup ok" $(BUILD)/qemu-smoke-reliability.log; then \
-		echo "[qemu-smoke-reliability] Missing diag waitpid options-not-supported check"; \
+	@if ! grep -Fq "diag: waitpid nohang pending ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag waitpid nohang pending check"; \
+		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "diag: waitpid nohang no-child ok" $(BUILD)/qemu-smoke-reliability.log; then \
+		echo "[qemu-smoke-reliability] Missing diag waitpid nohang no-child check"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
@@ -1004,6 +1284,368 @@ qemu-smoke-reliability-fuzz-lite-matrix: $(ISO)
 	fi
 	@echo "[qemu-smoke-reliability-fuzz-lite-matrix] PASS"
 
+qemu-smoke-storage-integrity: $(ISO) $(STORAGE_INTEGRITY_DISK)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-storage-integrity.log
+	@echo "[qemu-smoke-storage-integrity] Booting headless VM with writable /persist checks..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-storage-integrity,$(BUILD)/qemu-smoke-storage-integrity.log,$(STORAGE_INTEGRITY_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+printf 'echo v1 > file.txt\n'; \
+sleep 0.25; \
+printf 'echo v2 >> file.txt\n'; \
+sleep 0.25; \
+printf 'cat file.txt\n'; \
+sleep 0.25; \
+printf 'rm file.txt\n'; \
+sleep 0.25; \
+printf 'ls\n'; \
+sleep 0.25; \
+printf 'cat file.txt\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-storage-integrity,$(BUILD)/qemu-smoke-storage-integrity.log)
+	@if ! grep -Fq "ata: identify ok" $(BUILD)/qemu-smoke-storage-integrity.log; then \
+		echo "[qemu-smoke-storage-integrity] Missing ATA identify success log"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-integrity.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "persistfs: mounted /persist" $(BUILD)/qemu-smoke-storage-integrity.log; then \
+		echo "[qemu-smoke-storage-integrity] Missing persistfs mount log"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-integrity.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-storage-integrity.log | grep -Fxq "v1"; then \
+		echo "[qemu-smoke-storage-integrity] Missing first written line"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-integrity.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-storage-integrity.log | grep -Fxq "v2"; then \
+		echo "[qemu-smoke-storage-integrity] Missing appended line"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-integrity.log; \
+		exit 1; \
+	fi
+	@if tr -d '\r' < $(BUILD)/qemu-smoke-storage-integrity.log | grep -Fxq "file.txt"; then \
+		echo "[qemu-smoke-storage-integrity] Delete check failed: file still listed"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-integrity.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'cat: open failed' $(BUILD)/qemu-smoke-storage-integrity.log)" -ne 1 ]; then \
+		echo "[qemu-smoke-storage-integrity] Expected one post-delete open failure"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-integrity.log; \
+		exit 1; \
+	fi
+	@if grep -Fq "run: redirect open failed" $(BUILD)/qemu-smoke-storage-integrity.log; then \
+		echo "[qemu-smoke-storage-integrity] Unexpected redirect failure"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-integrity.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-storage-integrity] PASS"
+
+qemu-smoke-storage-persist: $(ISO) $(STORAGE_PERSIST_DISK)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-storage-persist.boot1.log $(BUILD)/qemu-smoke-storage-persist.boot2.log
+	@echo "[qemu-smoke-storage-persist] Boot #1 write, Boot #2 verify..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-storage-persist.boot1,$(BUILD)/qemu-smoke-storage-persist.boot1.log,$(STORAGE_PERSIST_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+	printf 'echo persist-token-42 > persist.txt\n'; \
+	sleep 0.25; \
+	printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-storage-persist.boot1,$(BUILD)/qemu-smoke-storage-persist.boot1.log)
+	@clean_flag=$$(od -An -tu4 -N4 -j8 $(STORAGE_PERSIST_DISK) | tr -d '[:space:]'); \
+	if [ "$$clean_flag" != "1" ]; then \
+		echo "[qemu-smoke-storage-persist] Expected clean flag=1 after boot1 metadata sync (got $$clean_flag)"; \
+		exit 1; \
+	fi
+	@printf '\000\000\000\000' | dd of=$(STORAGE_PERSIST_DISK) bs=1 seek=8 conv=notrunc status=none
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-storage-persist.boot2,$(BUILD)/qemu-smoke-storage-persist.boot2.log,$(STORAGE_PERSIST_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+	printf 'cat persist.txt\n'; \
+	sleep 0.25; \
+	printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-storage-persist.boot2,$(BUILD)/qemu-smoke-storage-persist.boot2.log)
+	@if ! grep -Fq "persistfs: dirty flag detected; running metadata sanity pass" $(BUILD)/qemu-smoke-storage-persist.boot2.log; then \
+		echo "[qemu-smoke-storage-persist] Missing dirty-mount warning"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-persist.boot2.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "persistfs: sanity pass ok" $(BUILD)/qemu-smoke-storage-persist.boot2.log; then \
+		echo "[qemu-smoke-storage-persist] Missing dirty-mount sanity-pass log"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-persist.boot2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-storage-persist.boot2.log | grep -Fxq "persist-token-42"; then \
+		echo "[qemu-smoke-storage-persist] Missing persisted token on second boot"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-persist.boot2.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-storage-persist] PASS"
+
+qemu-smoke-storage-replay: $(ISO) $(STORAGE_REPLAY_DISK)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-storage-replay.cycle1.log $(BUILD)/qemu-smoke-storage-replay.cycle2.log $(BUILD)/qemu-smoke-storage-replay.cycle3.log
+	@echo "[qemu-smoke-storage-replay] Running deterministic 3-cycle replay..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-storage-replay.cycle1,$(BUILD)/qemu-smoke-storage-replay.cycle1.log,$(STORAGE_REPLAY_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+printf 'echo replay-state-1 > replay.txt\n'; \
+sleep 0.25; \
+printf 'cat replay.txt\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-storage-replay.cycle1,$(BUILD)/qemu-smoke-storage-replay.cycle1.log)
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-storage-replay.cycle2,$(BUILD)/qemu-smoke-storage-replay.cycle2.log,$(STORAGE_REPLAY_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+printf 'cat replay.txt\n'; \
+sleep 0.25; \
+printf 'echo replay-state-2 > replay.txt\n'; \
+sleep 0.25; \
+printf 'cat replay.txt\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-storage-replay.cycle2,$(BUILD)/qemu-smoke-storage-replay.cycle2.log)
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-storage-replay.cycle3,$(BUILD)/qemu-smoke-storage-replay.cycle3.log,$(STORAGE_REPLAY_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+printf 'cat replay.txt\n'; \
+sleep 0.25; \
+printf 'rm replay.txt\n'; \
+sleep 0.25; \
+printf 'cat replay.txt\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-storage-replay.cycle3,$(BUILD)/qemu-smoke-storage-replay.cycle3.log)
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-storage-replay.cycle1.log | grep -Fxq "replay-state-1"; then \
+		echo "[qemu-smoke-storage-replay] Cycle1 missing state marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-replay.cycle1.log; \
+		exit 1; \
+	fi
+	@if [ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-storage-replay.cycle2.log | grep -Fxc 'replay-state-1')" -lt 1 ]; then \
+		echo "[qemu-smoke-storage-replay] Cycle2 missing replay-state-1"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-replay.cycle2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-storage-replay.cycle3.log | grep -Fxq "replay-state-2"; then \
+		echo "[qemu-smoke-storage-replay] Cycle3 missing replay-state-2"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-replay.cycle3.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'cat: open failed' $(BUILD)/qemu-smoke-storage-replay.cycle3.log)" -ne 1 ]; then \
+		echo "[qemu-smoke-storage-replay] Expected one open failure after delete in cycle3"; \
+		tail -n 220 $(BUILD)/qemu-smoke-storage-replay.cycle3.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-storage-replay] PASS"
+
+qemu-smoke-shell-history-persist: $(ISO) $(SHELL_HISTORY_PERSIST_DISK)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-shell-history-persist.boot1.log $(BUILD)/qemu-smoke-shell-history-persist.boot2.log $(BUILD)/qemu-smoke-shell-history-persist.boot3.log
+	@echo "[qemu-smoke-shell-history-persist] Boot #1 writes shell history, Boot #2 verifies+clears, Boot #3 verifies cleared state..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-shell-history-persist.boot1,$(BUILD)/qemu-smoke-shell-history-persist.boot1.log,$(SHELL_HISTORY_PERSIST_DISK),printf 'history clear\n'; \
+sleep 0.25; \
+printf 'echo hist-alpha\n'; \
+sleep 0.25; \
+printf 'echo hist-beta\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-history-persist.boot1,$(BUILD)/qemu-smoke-shell-history-persist.boot1.log)
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-shell-history-persist.boot2,$(BUILD)/qemu-smoke-shell-history-persist.boot2.log,$(SHELL_HISTORY_PERSIST_DISK),printf 'history\n'; \
+sleep 0.25; \
+printf 'history clear\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-history-persist.boot2,$(BUILD)/qemu-smoke-shell-history-persist.boot2.log)
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-shell-history-persist.boot3,$(BUILD)/qemu-smoke-shell-history-persist.boot3.log,$(SHELL_HISTORY_PERSIST_DISK),printf 'history\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-history-persist.boot3,$(BUILD)/qemu-smoke-shell-history-persist.boot3.log)
+	@if ! grep -Fq "ata: identify ok" $(BUILD)/qemu-smoke-shell-history-persist.boot1.log; then \
+		echo "[qemu-smoke-shell-history-persist] Missing ATA identify success log"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-history-persist.boot1.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "persistfs: mounted /persist" $(BUILD)/qemu-smoke-shell-history-persist.boot1.log; then \
+		echo "[qemu-smoke-shell-history-persist] Missing persistfs mount log on boot1"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-history-persist.boot1.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "echo hist-alpha" $(BUILD)/qemu-smoke-shell-history-persist.boot2.log; then \
+		echo "[qemu-smoke-shell-history-persist] Missing persisted history entry hist-alpha"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-history-persist.boot2.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "echo hist-beta" $(BUILD)/qemu-smoke-shell-history-persist.boot2.log; then \
+		echo "[qemu-smoke-shell-history-persist] Missing persisted history entry hist-beta"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-history-persist.boot2.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'history: cleared' $(BUILD)/qemu-smoke-shell-history-persist.boot2.log)" -ne 1 ]; then \
+		echo "[qemu-smoke-shell-history-persist] Expected one history clear confirmation on boot2"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-history-persist.boot2.log; \
+		exit 1; \
+	fi
+	@if grep -Fq "echo hist-alpha" $(BUILD)/qemu-smoke-shell-history-persist.boot3.log || grep -Fq "echo hist-beta" $(BUILD)/qemu-smoke-shell-history-persist.boot3.log; then \
+		echo "[qemu-smoke-shell-history-persist] Cleared history unexpectedly replayed on boot3"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-history-persist.boot3.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-shell-history-persist] PASS"
+
+qemu-smoke-fork-cow: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-fork-cow.log
+	@echo "[qemu-smoke-fork-cow] Booting headless VM with forktest..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-fork-cow,$(BUILD)/qemu-smoke-fork-cow.log,printf 'cd /bin\n'; \
+sleep 0.25; \
+printf 'forktest\n'; \
+sleep 0.50; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-fork-cow,$(BUILD)/qemu-smoke-fork-cow.log)
+	@if ! grep -Fq "forktest: child return 0 ok" $(BUILD)/qemu-smoke-fork-cow.log; then \
+		echo "[qemu-smoke-fork-cow] Missing child return marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-fork-cow.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "forktest: parent return child_pid ok" $(BUILD)/qemu-smoke-fork-cow.log; then \
+		echo "[qemu-smoke-fork-cow] Missing parent pid marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-fork-cow.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "forktest: cow static ok" $(BUILD)/qemu-smoke-fork-cow.log; then \
+		echo "[qemu-smoke-fork-cow] Missing static-data COW marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-fork-cow.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "forktest: cow stack ok" $(BUILD)/qemu-smoke-fork-cow.log; then \
+		echo "[qemu-smoke-fork-cow] Missing stack COW marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-fork-cow.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "forktest: waitpid status ok" $(BUILD)/qemu-smoke-fork-cow.log; then \
+		echo "[qemu-smoke-fork-cow] Missing waitpid marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-fork-cow.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'forktest: PASS' $(BUILD)/qemu-smoke-fork-cow.log)" -ne 1 ]; then \
+		echo "[qemu-smoke-fork-cow] Expected exactly one PASS marker"; \
+		tail -n 220 $(BUILD)/qemu-smoke-fork-cow.log; \
+		exit 1; \
+	fi
+	@if grep -Fq "user page fault:" $(BUILD)/qemu-smoke-fork-cow.log; then \
+		echo "[qemu-smoke-fork-cow] Unexpected user page fault"; \
+		tail -n 220 $(BUILD)/qemu-smoke-fork-cow.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-fork-cow] PASS"
+
+qemu-smoke-fork-cow-stress: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-fork-cow-stress.log
+	@echo "[qemu-smoke-fork-cow-stress] Booting headless VM with repeated forktest..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-fork-cow-stress,$(BUILD)/qemu-smoke-fork-cow-stress.log,printf 'cd /bin\n'; \
+sleep 0.25; \
+printf 'forktest 4\n'; \
+sleep 1.00; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-fork-cow-stress,$(BUILD)/qemu-smoke-fork-cow-stress.log)
+	@if [ "$$(grep -Fc 'forktest: PASS' $(BUILD)/qemu-smoke-fork-cow-stress.log)" -ne 4 ]; then \
+		echo "[qemu-smoke-fork-cow-stress] Expected four PASS markers"; \
+		tail -n 260 $(BUILD)/qemu-smoke-fork-cow-stress.log; \
+		exit 1; \
+	fi
+	@if grep -Fq "user page fault:" $(BUILD)/qemu-smoke-fork-cow-stress.log; then \
+		echo "[qemu-smoke-fork-cow-stress] Unexpected user page fault"; \
+		tail -n 260 $(BUILD)/qemu-smoke-fork-cow-stress.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-fork-cow-stress] PASS"
+
+qemu-smoke-fork-cow-pressure: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-fork-cow-pressure.log
+	@echo "[qemu-smoke-fork-cow-pressure] Booting headless VM with fork pressure scenario..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-fork-cow-pressure,$(BUILD)/qemu-smoke-fork-cow-pressure.log,printf 'cd /bin\n'; \
+sleep 0.25; \
+printf 'forktest pressure\n'; \
+sleep 1.25; \
+printf 'echo pressure-shell-alive\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-fork-cow-pressure,$(BUILD)/qemu-smoke-fork-cow-pressure.log)
+	@if ! grep -Fq "forktest: pressure fork failure ok" $(BUILD)/qemu-smoke-fork-cow-pressure.log; then \
+		echo "[qemu-smoke-fork-cow-pressure] Missing deterministic fork-failure marker"; \
+		tail -n 260 $(BUILD)/qemu-smoke-fork-cow-pressure.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "forktest: pressure reap ok" $(BUILD)/qemu-smoke-fork-cow-pressure.log; then \
+		echo "[qemu-smoke-fork-cow-pressure] Missing pressure reap marker"; \
+		tail -n 260 $(BUILD)/qemu-smoke-fork-cow-pressure.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "forktest: pressure PASS" $(BUILD)/qemu-smoke-fork-cow-pressure.log; then \
+		echo "[qemu-smoke-fork-cow-pressure] Missing pressure PASS marker"; \
+		tail -n 260 $(BUILD)/qemu-smoke-fork-cow-pressure.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-fork-cow-pressure.log | grep -Fxq "pressure-shell-alive"; then \
+		echo "[qemu-smoke-fork-cow-pressure] Missing shell responsiveness marker after pressure run"; \
+		tail -n 260 $(BUILD)/qemu-smoke-fork-cow-pressure.log; \
+		exit 1; \
+	fi
+	@if grep -Fq "user page fault:" $(BUILD)/qemu-smoke-fork-cow-pressure.log; then \
+		echo "[qemu-smoke-fork-cow-pressure] Unexpected user page fault"; \
+		tail -n 260 $(BUILD)/qemu-smoke-fork-cow-pressure.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-fork-cow-pressure] PASS"
+
+qemu-smoke-shell-bg-replay: $(ISO)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-shell-bg-replay.log
+	@echo "[qemu-smoke-shell-bg-replay] Booting headless VM with repeated background pipelines..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-shell-bg-replay,$(BUILD)/qemu-smoke-shell-bg-replay.log,printf 'cd /bin\n'; \
+sleep 0.25; \
+printf 'sleep 60 | cat &\n'; \
+sleep 0.20; \
+printf 'echo bg-replay-1\n'; \
+sleep 1.10; \
+printf 'echo settle-1\n'; \
+sleep 0.25; \
+printf 'sleep 60 | cat &\n'; \
+sleep 0.20; \
+printf 'echo bg-replay-2\n'; \
+sleep 1.10; \
+printf 'echo settle-2\n'; \
+sleep 0.25; \
+printf 'sleep 60 | cat &\n'; \
+sleep 0.20; \
+printf 'echo bg-replay-3\n'; \
+sleep 1.25; \
+printf 'echo settle-3\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-bg-replay,$(BUILD)/qemu-smoke-shell-bg-replay.log)
+	@if [ "$$(grep -Fc 'bg: started job=' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -ne 3 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Expected three background launch markers"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'bg: done job=' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -ne 3 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Expected three background completion markers"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
+		exit 1; \
+	fi
+	@if [ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-bg-replay.log | grep -Fxc 'bg-replay-1')" -lt 1 ] || \
+		[ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-bg-replay.log | grep -Fxc 'bg-replay-2')" -lt 1 ] || \
+		[ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-bg-replay.log | grep -Fxc 'bg-replay-3')" -lt 1 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Missing foreground responsiveness markers"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sh: exit" $(BUILD)/qemu-smoke-shell-bg-replay.log; then \
+		echo "[qemu-smoke-shell-bg-replay] Missing shell exit line"; \
+		tail -n 220 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-shell-bg-replay] PASS"
+
 qemu-smoke-gui-fb-dump: $(ISO)
 	@mkdir -p $(NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR)
 	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
@@ -1011,7 +1653,28 @@ qemu-smoke-gui-fb-dump: $(ISO)
 	dump="$(NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR)/gui-fb-failure-$${stamp}.ppm"; \
 	log="$(NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR)/gui-fb-failure-$${stamp}.qemu.log"; \
 	echo "[qemu-smoke-gui-fb-dump] Capturing framebuffer artifact to $$dump (qmp_port=$$port)"; \
-	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump" "$$log" "$(NIGHTLY_GUI_TRIAGE_BOOT_WAIT_SECS)" "$$port"
+	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump" "$$log" "$(NIGHTLY_GUI_TRIAGE_BOOT_WAIT_SECS)" "$$port" failure
+
+qemu-smoke-gui-visual-baseline: $(ISO)
+	@mkdir -p $(GUI_VISUAL_BASELINE_ARTIFACT_DIR)
+	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
+	port=$$((44000 + ($$$$ % 10000))); \
+	dump="$(GUI_VISUAL_BASELINE_ARTIFACT_DIR)/gui-fb-baseline-$${stamp}.ppm"; \
+	log="$(GUI_VISUAL_BASELINE_ARTIFACT_DIR)/gui-fb-baseline-$${stamp}.qemu.log"; \
+	echo "[qemu-smoke-gui-visual-baseline] Capturing framebuffer baseline artifact to $$dump (qmp_port=$$port)"; \
+	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump" "$$log" "$(GUI_VISUAL_BASELINE_BOOT_WAIT_SECS)" "$$port" baseline; \
+	./scripts/gui_visual_baseline.py verify --ppm "$$dump" --profile fb-shell-v5 --expect-hash "$(GUI_VISUAL_BASELINE_HASH_FB_SHELL_V5)"
+	@echo "[qemu-smoke-gui-visual-baseline] PASS"
+
+qemu-smoke-gui-visual-baseline-refresh: $(ISO)
+	@mkdir -p $(GUI_VISUAL_BASELINE_ARTIFACT_DIR)
+	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
+	port=$$((45000 + ($$$$ % 10000))); \
+	dump="$(GUI_VISUAL_BASELINE_ARTIFACT_DIR)/gui-fb-baseline-refresh-$${stamp}.ppm"; \
+	log="$(GUI_VISUAL_BASELINE_ARTIFACT_DIR)/gui-fb-baseline-refresh-$${stamp}.qemu.log"; \
+	echo "[qemu-smoke-gui-visual-baseline-refresh] Capturing framebuffer artifact to $$dump (qmp_port=$$port)"; \
+	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump" "$$log" "$(GUI_VISUAL_BASELINE_BOOT_WAIT_SECS)" "$$port" baseline; \
+	./scripts/gui_visual_baseline.py hash --ppm "$$dump" --profile fb-shell-v5
 
 check-pr:
 	@$(MAKE) toolchain-check
@@ -1020,6 +1683,7 @@ check-pr:
 	@$(MAKE) qemu-smoke-userfault
 	@$(MAKE) qemu-smoke-shell-core
 	@$(MAKE) qemu-smoke-reliability
+	@$(MAKE) qemu-smoke-fork-cow
 
 check: check-pr
 
@@ -1034,6 +1698,33 @@ check-nightly:
 	fi; \
 	if [ $$rc -eq 0 ]; then \
 		$(MAKE) qemu-smoke-reliability-fuzz-lite-matrix || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-storage-integrity || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-storage-persist || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-storage-replay || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-shell-history-persist || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-fork-cow || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-fork-cow-stress || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-fork-cow-pressure || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-shell-bg-replay || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-gui-visual-baseline || rc=$$?; \
 	fi; \
 	if [ $$rc -ne 0 ]; then \
 		echo "[check-nightly] failure detected; collecting non-gating framebuffer triage artifact..."; \

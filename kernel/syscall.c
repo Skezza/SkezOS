@@ -20,9 +20,14 @@ extern void syscall_entry_stub(void);
 #define SYSCALL_SPAWN_PATH_MAX 64U
 #define SYSCALL_CMDLINE_MAX    128U
 #define SYSCALL_OPEN_PATH_MAX  96U
+#define SYSCALL_UNLINK_PATH_MAX 96U
 #define SYSCALL_TASK_SNAPSHOT_MAX 16U
 #define SYSCALL_LIST_DIR_PATH_MAX 96U
 #define SYSCALL_LIST_DIR_MAX 16U
+#define SYSCALL_FRAME_EIP_WORD 12U
+#define SYSCALL_FRAME_CS_WORD 13U
+#define SYSCALL_FRAME_EFLAGS_WORD 14U
+#define SYSCALL_FRAME_ESP_WORD 15U
 
 static int syscall_stdio_kfile_for_fd(uint32_t fd, int for_write, struct kfile **out_file);
 static int syscall_copy_user_path_raw(uint32_t path_ptr,
@@ -35,6 +40,8 @@ static int syscall_resolve_path_raw(const char *raw,
                                     uint32_t out_cap,
                                     uint32_t *out_len);
 static int syscall_kfile_for_dup(uint32_t fd, struct kfile **out_file);
+static int syscall_capture_user_fork_context(struct syscall_saved_regs *regs,
+                                             struct sched_user_fork_context *out_ctx);
 
 static uint32_t syscall_ret_err(int err) {
     return (uint32_t)(-(int32_t)err);
@@ -282,6 +289,34 @@ static int syscall_kfile_for_dup(uint32_t fd, struct kfile **out_file) {
     return rc;
 }
 
+static int syscall_capture_user_fork_context(struct syscall_saved_regs *regs,
+                                             struct sched_user_fork_context *out_ctx) {
+    uint32_t *words;
+    uint32_t cs;
+
+    if (!regs || !out_ctx) {
+        return -KERR_INVAL;
+    }
+
+    words = (uint32_t *)(uintptr_t)regs;
+    cs = words[SYSCALL_FRAME_CS_WORD];
+    if ((cs & 0x3U) != 0x3U) {
+        return -KERR_NOTSUP;
+    }
+
+    out_ctx->eax = regs->eax;
+    out_ctx->ebx = regs->ebx;
+    out_ctx->ecx = regs->ecx;
+    out_ctx->edx = regs->edx;
+    out_ctx->esi = regs->esi;
+    out_ctx->edi = regs->edi;
+    out_ctx->ebp = regs->ebp;
+    out_ctx->eip = words[SYSCALL_FRAME_EIP_WORD];
+    out_ctx->esp = words[SYSCALL_FRAME_ESP_WORD];
+    out_ctx->eflags = words[SYSCALL_FRAME_EFLAGS_WORD];
+    return 0;
+}
+
 static uint32_t sys_write(struct syscall_saved_regs *regs) {
     uint32_t fd = regs->ebx;
     uint32_t ptr = regs->ecx;
@@ -353,10 +388,6 @@ static uint32_t sys_spawn(struct syscall_saved_regs *regs) {
     if (child_pid < 0) {
         return syscall_ret_err(-child_pid);
     }
-    if (sched_current_task_is_user() &&
-        vfs_console_input_owner_is_task(sched_current_task_pid())) {
-        (void)vfs_console_set_input_owner_task(child_pid);
-    }
     return (uint32_t)child_pid;
 }
 
@@ -415,10 +446,6 @@ static uint32_t sys_spawn_ex(struct syscall_saved_regs *regs) {
               child_pid,
               req.flags);
         return syscall_ret_err(-child_pid);
-    }
-    if (sched_current_task_is_user() &&
-        vfs_console_input_owner_is_task(sched_current_task_pid())) {
-        (void)vfs_console_set_input_owner_task(child_pid);
     }
     return (uint32_t)child_pid;
 }
@@ -480,6 +507,53 @@ static uint32_t sys_close(struct syscall_saved_regs *regs) {
         return syscall_ret_err(-rc);
     }
     return 0;
+}
+
+static uint32_t sys_unlink(struct syscall_saved_regs *regs) {
+    uint32_t path_ptr = regs->ebx;
+    uint32_t path_len = regs->ecx;
+    char raw_path[SYSCALL_UNLINK_PATH_MAX];
+    char path[SYSCALL_UNLINK_PATH_MAX];
+    uint32_t resolved_len = 0U;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+    rc = syscall_copy_user_path_raw(path_ptr, path_len, raw_path, sizeof(raw_path));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    rc = syscall_resolve_path_raw(raw_path, path_len, path, sizeof(path), &resolved_len);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    rc = vfs_unlink(path);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 0;
+}
+
+static uint32_t sys_fork(struct syscall_saved_regs *regs) {
+    struct sched_user_fork_context fork_ctx;
+    int child_pid = -1;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = syscall_capture_user_fork_context(regs, &fork_ctx);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+
+    rc = sched_fork_current_user_task(&fork_ctx, &child_pid);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return (uint32_t)child_pid;
 }
 
 static uint32_t sys_pipe(struct syscall_saved_regs *regs) {
@@ -594,6 +668,7 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     int target_pid = (int)regs->ebx;
     uint32_t status_ptr = regs->ecx;
     uint32_t options = regs->edx;
+    int nohang = (options & SYSCALL_WAITPID_FLAG_NOHANG) != 0U;
     int parent_pid;
     int waited_pid;
     int32_t waited_exit = 0;
@@ -603,7 +678,7 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     if (!sched_current_task_is_user()) {
         return syscall_ret_err(KERR_NOTSUP);
     }
-    if (options != 0U) {
+    if ((options & ~SYSCALL_WAITPID_FLAG_NOHANG) != 0U) {
         return syscall_ret_err(KERR_NOTSUP);
     }
     if (status_ptr != 0U &&
@@ -612,7 +687,8 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
     }
 
     parent_pid = sched_current_task_pid();
-    if (target_pid > 0 &&
+    if (!nohang &&
+        target_pid > 0 &&
         parent_pid > 0 &&
         sched_current_task_owns_child_pid(target_pid)) {
         if (vfs_console_input_owner_is_task(parent_pid)) {
@@ -624,7 +700,7 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
         }
     }
 
-    rc = sched_waitpid(target_pid, &waited_pid, &waited_exit);
+    rc = sched_waitpid_ex(target_pid, options, &waited_pid, &waited_exit);
     if (restore_stdin) {
         (void)vfs_console_set_input_owner_task(parent_pid);
     }
@@ -632,22 +708,24 @@ static uint32_t sys_waitpid(struct syscall_saved_regs *regs) {
         return syscall_ret_err(-rc);
     }
 
-    if (status_ptr != 0U) {
+    if (status_ptr != 0U && waited_pid > 0) {
         rc = uaccess_copy_to_user(status_ptr, &waited_exit, (uint32_t)sizeof(waited_exit));
         if (rc < 0) {
             return syscall_ret_err(-rc);
         }
     }
 
-    KLOGI("sys_waitpid: parent_pid=%d task=%s waited_pid=%d exit=%d",
-          sched_current_task_pid(),
-          sched_current_task_name(),
-          waited_pid,
-          waited_exit);
-    KLOGI("SMOKE_LIFECYCLE_WAIT_REAP parent_pid=%d waited_pid=%d exit=%d",
-          sched_current_task_pid(),
-          waited_pid,
-          waited_exit);
+    if (waited_pid > 0) {
+        KLOGI("sys_waitpid: parent_pid=%d task=%s waited_pid=%d exit=%d",
+              sched_current_task_pid(),
+              sched_current_task_name(),
+              waited_pid,
+              waited_exit);
+        KLOGI("SMOKE_LIFECYCLE_WAIT_REAP parent_pid=%d waited_pid=%d exit=%d",
+              sched_current_task_pid(),
+              waited_pid,
+              waited_exit);
+    }
     return (uint32_t)waited_pid;
 }
 
@@ -923,6 +1001,10 @@ uint32_t syscall_dispatch(struct syscall_saved_regs *regs) {
             return sys_dup(regs);
         case SYS_DUP2:
             return sys_dup2(regs);
+        case SYS_UNLINK:
+            return sys_unlink(regs);
+        case SYS_FORK:
+            return sys_fork(regs);
         default:
             KLOGW("syscall: unknown nr=%u ebx=%x ecx=%x edx=%x",
                   regs->eax, regs->ebx, regs->ecx, regs->edx);

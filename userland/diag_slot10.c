@@ -19,7 +19,8 @@ static const char kCheckOpenMissing[] = "diag: open missing path";
 static const char kCheckFdReadCloseFlow[] = "diag: fd open/read/close flow";
 static const char kCheckTimeInfoBadPtr[] = "diag: time_info bad ptr";
 static const char kCheckTimeInfoOk[] = "diag: time_info valid";
-static const char kCheckWaitpidOptionsNotsup[] = "diag: waitpid options notsup";
+static const char kCheckWaitpidNohangPending[] = "diag: waitpid nohang pending";
+static const char kCheckWaitpidNohangNoChild[] = "diag: waitpid nohang no-child";
 static const char kCheckTaskSnapshotBadPtr[] = "diag: task_snapshot bad ptr";
 static const char kCheckTaskSnapshotZeroCap[] = "diag: task_snapshot zero cap";
 static const char kCheckTaskSnapshotOne[] = "diag: task_snapshot cap one";
@@ -232,6 +233,30 @@ static int32_t diag_spawn_wait_hello(int32_t *out_pid) {
     return 0;
 }
 
+static int32_t diag_waitpid_nohang_pending(void) {
+    int32_t pid = user_spawn_ex("/bin/sleep.elf", 14U, "200", 3U);
+    int32_t status = -1;
+    int32_t waited;
+
+    if (pid <= 0) {
+        return pid < 0 ? pid : -22;
+    }
+    waited = user_waitpid(pid, &status, SYSCALL_WAITPID_FLAG_NOHANG);
+    if (waited < 0) {
+        (void)user_waitpid(pid, 0, 0U);
+        return waited;
+    }
+    if (waited != 0) {
+        (void)user_waitpid(pid, 0, 0U);
+        return -22;
+    }
+    waited = user_waitpid(pid, &status, 0U);
+    if (waited != pid || status != 0) {
+        return -22;
+    }
+    return 0;
+}
+
 void _start(int argc, char **argv) {
     int ok = 1;
     int32_t waited_pid = -1;
@@ -345,9 +370,14 @@ void _start(int argc, char **argv) {
                      0)) {
         ok = 0;
     }
-    if (!diag_expect(kCheckWaitpidOptionsNotsup,
-                     user_waitpid(-1, 0, 1U),
-                     -95)) {
+    if (!diag_expect(kCheckWaitpidNohangPending,
+                     diag_waitpid_nohang_pending(),
+                     0)) {
+        ok = 0;
+    }
+    if (!diag_expect(kCheckWaitpidNohangNoChild,
+                     user_waitpid(-1, 0, SYSCALL_WAITPID_FLAG_NOHANG),
+                     -2)) {
         ok = 0;
     }
     if (!diag_expect(kCheckTaskSnapshotBadPtr,

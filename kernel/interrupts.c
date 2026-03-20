@@ -4,6 +4,7 @@
 #include "klog.h"
 #include "panic.h"
 #include "pic.h"
+#include "paging.h"
 #include "sched.h"
 #include "utils.h"
 
@@ -83,6 +84,9 @@ __attribute__((interrupt)) void isr_page_fault(struct interrupt_frame *frame, ui
     int user_mode = frame_from_user_mode(frame);
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(fault_addr));
     if (user_mode) {
+        if (paging_handle_cow_fault(paging_current_address_space(), fault_addr, error_code) == 0) {
+            return;
+        }
         sched_note_current_user_fault(frame->eip, fault_addr, error_code);
         KLOGW("user page fault: pid=%d name=%s cr2=%x eip=%x cs=%x eflags=%x err=%x",
               sched_current_task_pid(),

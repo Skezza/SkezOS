@@ -25,4 +25,20 @@ void tss_set_kernel_stack(uint32_t esp0);
  */
 void enter_user_mode(uint32_t user_eip, uint32_t user_esp) __attribute__((noreturn));
 
+struct user_mode_resume_ctx {
+    uint32_t eax;
+    uint32_t ebx;
+    uint32_t ecx;
+    uint32_t edx;
+    uint32_t esi;
+    uint32_t edi;
+    uint32_t ebp;
+    uint32_t eip;
+    uint32_t esp;
+    uint32_t eflags;
+};
+
+/* Enter ring3 using a full register snapshot. Does not return. */
+void enter_user_mode_full(const struct user_mode_resume_ctx *ctx) __attribute__((noreturn));
+
 #endif /* GDT_H */

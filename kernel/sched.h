@@ -8,6 +8,19 @@ struct syscall_task_snapshot_entry;
 
 typedef void (*sched_task_entry_t)(void *arg);
 
+struct sched_user_fork_context {
+    uint32_t eax;
+    uint32_t ebx;
+    uint32_t ecx;
+    uint32_t edx;
+    uint32_t esi;
+    uint32_t edi;
+    uint32_t ebp;
+    uint32_t eip;
+    uint32_t esp;
+    uint32_t eflags;
+};
+
 /* Initialize scheduler state and create the idle task. */
 void sched_init(void);
 
@@ -63,6 +76,7 @@ int sched_spawn_user_child_task(const char *name,
                                 uint32_t stack_size,
                                 int inherit_fds,
                                 int *out_pid);
+int sched_fork_current_user_task(const struct sched_user_fork_context *ctx, int *out_pid);
 
 /* Wait for a child task to exit.
  * TARGET_PID supports:
@@ -71,6 +85,7 @@ int sched_spawn_user_child_task(const char *name,
  * Returns 0 on success and writes the reaped pid/exit code.
  */
 int sched_waitpid(int target_pid, int *out_waited_pid, int32_t *out_exit_code);
+int sched_waitpid_ex(int target_pid, uint32_t options, int *out_waited_pid, int32_t *out_exit_code);
 
 /* Start the scheduler by switching from boot context to the first runnable task.
  * Does not return.
