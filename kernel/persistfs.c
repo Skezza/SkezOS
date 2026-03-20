@@ -265,6 +265,28 @@ static int persistfs_sync_metadata(void) {
     return 0;
 }
 
+static int persistfs_mark_clean(void) {
+    int rc;
+
+    if (g_persistfs_super.clean != 0U) {
+        return 0;
+    }
+
+    g_persistfs_super.clean = 1U;
+    rc = persistfs_sync_superblock();
+    if (rc < 0) {
+        g_persistfs_super.clean = 0U;
+        return rc;
+    }
+    rc = block_cache_flush();
+    if (rc < 0) {
+        g_persistfs_super.clean = 0U;
+        (void)persistfs_sync_superblock();
+        return rc;
+    }
+    return 0;
+}
+
 static int persistfs_load_file_table(void) {
     uint8_t sector[PERSISTFS_BLOCK_SIZE];
 
@@ -375,7 +397,7 @@ static int persistfs_run_metadata_sanity_pass(void) {
         return persistfs_sync_metadata();
     }
     KLOGI("persistfs: sanity pass ok");
-    return 0;
+    return persistfs_mark_clean();
 }
 
 static int persistfs_validate_superblock(const struct persistfs_superblock_disk *sb,

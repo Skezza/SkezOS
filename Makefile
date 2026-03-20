@@ -1378,6 +1378,11 @@ sleep 0.25; \
 		tail -n 220 $(BUILD)/qemu-smoke-storage-persist.boot2.log; \
 		exit 1; \
 	fi
+	@clean_flag=$$(od -An -tu4 -N4 -j8 $(STORAGE_PERSIST_DISK) | tr -d '[:space:]'); \
+	if [ "$$clean_flag" != "1" ]; then \
+		echo "[qemu-smoke-storage-persist] Expected clean flag=1 after dirty-mount sanity recovery (got $$clean_flag)"; \
+		exit 1; \
+	fi
 	@echo "[qemu-smoke-storage-persist] PASS"
 
 qemu-smoke-storage-replay: $(ISO) $(STORAGE_REPLAY_DISK)
