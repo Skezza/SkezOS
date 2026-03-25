@@ -60,9 +60,9 @@ static uint32_t g_shell_bg_next_id = 1U;
 
 static const char kBanner[] = "SkezOS shell ready\nType 'help' for commands.\n";
 static const char kHelp[] =
-    "builtins: help history [clear|run N] ps ls pwd cd wait exit\n"
+    "builtins: help history [clear|run N] ps ls pwd cd jobs fg [job_id] wait exit\n"
     "run: <name> -> /bin/<name>.elf, ./tool uses cwd, pipeline/redir supported, suffix '&' for background\n"
-    "wait: blocks until tracked background pipelines complete\n"
+    "jobs: list tracked background pipelines, fg waits one job, wait drains all tracked jobs\n"
     "hist: !!/!N/!-N/!prefix/!?term/^old^new^ recalls history\n"
     "edit: BS deletes, Ctrl+W word, Ctrl+U line, Esc/Ctrl+P history, Ctrl+N forward, Tab completes commands, Ctrl+R search\n";
 static const char kCdFail[] = "cd: chdir failed\n";
@@ -96,6 +96,13 @@ static const char kBgStatusPrefix[] = " status=";
 static const char kBgCmdPrefix[] = " cmd=";
 static const char kBgOverflowPrefix[] = "bg: overflow cmd=";
 static const char kBgTrackFail[] = "run: background tracking failed\n";
+static const char kJobsNone[] = "jobs: no background jobs\n";
+static const char kJobsPrefix[] = "jobs: id=";
+static const char kJobsRemPrefix[] = " rem=";
+static const char kFgUsage[] = "fg: usage: fg [job_id]\n";
+static const char kFgNoJobs[] = "fg: no background jobs\n";
+static const char kFgNotFound[] = "fg: job not found\n";
+static const char kFgDonePrefix[] = "fg: done job=";
 static const char kExit[] = "sh: exit\n";
 static const char kNewline[] = "\n";
 static const char kEraseOne[] = "\b \b";
@@ -108,6 +115,8 @@ static const char *kShellCompletionBuiltins[] = {
     "ls",
     "pwd",
     "cd",
+    "jobs",
+    "fg",
     "exit",
 };
 
@@ -124,6 +133,9 @@ static int shell_history_handle_command(const char *args, uint32_t args_len);
 static int shell_dispatch_line(char *line);
 static void shell_reap_background_jobs_nonblocking(void);
 static void shell_drain_background_jobs(void);
+static void shell_bg_note_reaped(int32_t pid, int32_t status);
+static int shell_run_jobs(void);
+static int shell_run_fg(const char *args, uint32_t args_len);
 static int shell_history_search(const char *query,
                                 uint32_t query_len,
                                 uint32_t start_offset,
@@ -1468,6 +1480,8 @@ static int shell_is_builtin_name(const char *cmd, uint32_t cmd_len) {
     }
     return user_str_eq_n(cmd, "help", cmd_len) ||
            user_str_eq_n(cmd, "history", cmd_len) ||
+           user_str_eq_n(cmd, "jobs", cmd_len) ||
+           user_str_eq_n(cmd, "fg", cmd_len) ||
            user_str_eq_n(cmd, "wait", cmd_len) ||
            user_str_eq_n(cmd, "ps", cmd_len) ||
            user_str_eq_n(cmd, "ls", cmd_len) ||
@@ -1810,6 +1824,145 @@ static void shell_bg_print_overflow(const char *cmd_preview) {
         shell_write_str(cmd_preview);
     }
     shell_write_str(kNewline);
+}
+
+static struct shell_bg_job *shell_bg_find_latest_job(void) {
+    struct shell_bg_job *best = 0;
+
+    for (uint32_t i = 0U; i < SHELL_BG_JOB_MAX; i++) {
+        struct shell_bg_job *job = &g_shell_bg_jobs[i];
+        if (job->used == 0U) {
+            continue;
+        }
+        if (!best || job->id > best->id) {
+            best = job;
+        }
+    }
+    return best;
+}
+
+static struct shell_bg_job *shell_bg_find_job_by_id(uint32_t id) {
+    for (uint32_t i = 0U; i < SHELL_BG_JOB_MAX; i++) {
+        struct shell_bg_job *job = &g_shell_bg_jobs[i];
+        if (job->used != 0U && job->id == id) {
+            return job;
+        }
+    }
+    return 0;
+}
+
+static int shell_run_jobs(void) {
+    uint32_t listed = 0U;
+    char num[12];
+
+    shell_reap_background_jobs_nonblocking();
+    for (uint32_t i = 0U; i < SHELL_BG_JOB_MAX; i++) {
+        struct shell_bg_job *job = &g_shell_bg_jobs[i];
+        if (job->used == 0U) {
+            continue;
+        }
+
+        listed++;
+        shell_write_str(kJobsPrefix);
+        shell_format_u32(num, sizeof(num), job->id);
+        shell_write_str(num);
+        shell_write_str(kBgPidPrefix);
+        shell_format_i32(num, sizeof(num), job->last_pid);
+        shell_write_str(num);
+        shell_write_str(kJobsRemPrefix);
+        shell_format_u32(num, sizeof(num), job->remaining);
+        shell_write_str(num);
+        shell_write_str(kBgCmdPrefix);
+        shell_write_str(job->cmd_preview);
+        shell_write_str(kNewline);
+    }
+
+    if (listed == 0U) {
+        shell_write_str(kJobsNone);
+    }
+    return 1;
+}
+
+static int shell_run_fg(const char *args, uint32_t args_len) {
+    struct shell_bg_job *target = 0;
+    uint32_t job_id = 0U;
+    uint32_t have_job_id = 0U;
+    uint32_t arg_start = 0U;
+    uint32_t arg_end = 0U;
+    int32_t status = 0;
+    char num[12];
+
+    shell_reap_background_jobs_nonblocking();
+
+    if (!args) {
+        args = "";
+        args_len = 0U;
+    }
+    arg_start = shell_skip_spaces(args, 0U);
+    if (arg_start < args_len && args[arg_start] != '\0') {
+        arg_end = shell_token_end(args, arg_start);
+        if (shell_skip_spaces(args, arg_end) != args_len) {
+            shell_write_str(kFgUsage);
+            return 1;
+        }
+
+        for (uint32_t i = arg_start; i < arg_end; i++) {
+            uint32_t digit;
+            if (args[i] < '0' || args[i] > '9') {
+                shell_write_str(kFgUsage);
+                return 1;
+            }
+            digit = (uint32_t)(args[i] - '0');
+            if (job_id > 429496729U || (job_id == 429496729U && digit > 5U)) {
+                shell_write_str(kFgUsage);
+                return 1;
+            }
+            job_id = job_id * 10U + digit;
+        }
+        if (job_id == 0U) {
+            shell_write_str(kFgUsage);
+            return 1;
+        }
+        have_job_id = 1U;
+    }
+
+    if (have_job_id != 0U) {
+        target = shell_bg_find_job_by_id(job_id);
+        if (!target) {
+            shell_write_str(kFgNotFound);
+            return 1;
+        }
+    } else {
+        target = shell_bg_find_latest_job();
+        if (!target) {
+            shell_write_str(kFgNoJobs);
+            return 1;
+        }
+        job_id = target->id;
+    }
+
+    while (target->used != 0U) {
+        int32_t waited = user_waitpid(-1, &status, 0U);
+        if (waited <= 0) {
+            shell_write_str(kWaitFail);
+            return 1;
+        }
+        shell_bg_note_reaped(waited, status);
+    }
+
+    shell_write_str(kFgDonePrefix);
+    shell_format_u32(num, sizeof(num), job_id);
+    shell_write_str(num);
+    shell_write_str(kBgPidPrefix);
+    shell_format_i32(num, sizeof(num), target->last_pid);
+    shell_write_str(num);
+    shell_write_str(kBgStatusPrefix);
+    shell_format_i32(num, sizeof(num), target->last_status);
+    shell_write_str(num);
+    shell_write_str(kBgCmdPrefix);
+    shell_write_str(target->cmd_preview);
+    shell_write_str(kNewline);
+    return 1;
 }
 
 static int shell_bg_register_job(const int32_t pids[SHELL_PIPELINE_MAX],
@@ -2451,6 +2604,12 @@ static int shell_dispatch_builtin(struct shell_stage *stage) {
     }
     if (user_str_eq_n(stage->cmd, "history", stage->cmd_len)) {
         return shell_history_handle_command(stage->cmdline, stage->cmdline_len);
+    }
+    if (user_str_eq_n(stage->cmd, "jobs", stage->cmd_len)) {
+        return shell_run_jobs();
+    }
+    if (user_str_eq_n(stage->cmd, "fg", stage->cmd_len)) {
+        return shell_run_fg(stage->cmdline, stage->cmdline_len);
     }
     if (user_str_eq_n(stage->cmd, "wait", stage->cmd_len)) {
         shell_wait_background_jobs();

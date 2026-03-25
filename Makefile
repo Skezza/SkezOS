@@ -554,6 +554,14 @@ sleep 0.25; \
 	sleep 0.25; \
 	printf 'echo bg-foreground\n'; \
 	sleep 0.20; \
+	printf 'jobs\n'; \
+	sleep 0.20; \
+	printf 'fg\n'; \
+	sleep 0.20; \
+	printf 'echo fg-active-done\n'; \
+	sleep 0.20; \
+	printf 'sleep 80 &\n'; \
+	sleep 0.10; \
 	printf 'wait\n'; \
 	sleep 0.20; \
 	printf 'echo wait-active-done\n'; \
@@ -766,6 +774,21 @@ qemu-smoke-shell-core: $(ISO)
 	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "bg-foreground"; then \
 		echo "[qemu-smoke-shell-core] Missing foreground responsiveness marker after bg launch"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "jobs: id=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing jobs builtin listing output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "fg: done job=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing fg builtin completion output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "fg-active-done"; then \
+		echo "[qemu-smoke-shell-core] Missing fg completion marker"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
 	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "wait-active-done"; then \
