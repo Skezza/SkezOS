@@ -11,7 +11,7 @@
 #define SHELL_PIPELINE_MAX 8U
 #define SHELL_STAGE_CMDLINE_MAX 96U
 /* Keep this below spawn-slot concurrency so overflow handling stays reachable in smoke tests. */
-#define SHELL_BG_JOB_MAX 1U
+#define SHELL_BG_JOB_MAX 2U
 #define SHELL_COMPLETION_MAX_MATCHES (SHELL_LS_MAX_ENTRIES + 8U)
 #define SHELL_HISTORY_MAX 8U
 #define SHELL_HISTORY_PERSIST_PATH "/persist/.sh_history"

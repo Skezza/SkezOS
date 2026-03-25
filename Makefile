@@ -75,7 +75,8 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/busybox_slot14.o \
 	$(USERLAND_BUILD)/reliability_runner_slot15.o \
 	$(USERLAND_BUILD)/rm_slot16.o \
-	$(USERLAND_BUILD)/forktest_slot17.o
+	$(USERLAND_BUILD)/forktest_slot17.o \
+	$(USERLAND_BUILD)/sleep2_slot18.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -95,7 +96,8 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/busybox.elf \
 	$(USERLAND_BUILD)/reliability_runner.elf \
 	$(USERLAND_BUILD)/rm.elf \
-	$(USERLAND_BUILD)/forktest.elf
+	$(USERLAND_BUILD)/forktest.elf \
+	$(USERLAND_BUILD)/sleep2.elf
 
 .PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-fb-dump qemu-smoke-gui-visual-baseline qemu-smoke-gui-visual-baseline-refresh qemu-smoke-storage-integrity qemu-smoke-storage-persist qemu-smoke-storage-replay qemu-smoke-shell-history-persist qemu-smoke-fork-cow qemu-smoke-fork-cow-stress qemu-smoke-fork-cow-pressure qemu-smoke-shell-bg-replay check check-pr check-release check-nightly
 
@@ -179,6 +181,9 @@ $(USERLAND_BUILD)/rm.elf: $(USERLAND_BUILD)/rm_slot16.o
 $(USERLAND_BUILD)/forktest.elf: $(USERLAND_BUILD)/forktest_slot17.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01533000 -o $@ $<
 
+$(USERLAND_BUILD)/sleep2.elf: $(USERLAND_BUILD)/sleep2_slot18.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01544000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -200,6 +205,7 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/reliability_runner.elf $(INITRAMFS_STAGING)/bin/reliability_runner.elf
 	cp $(USERLAND_BUILD)/rm.elf $(INITRAMFS_STAGING)/bin/rm.elf
 	cp $(USERLAND_BUILD)/forktest.elf $(INITRAMFS_STAGING)/bin/forktest.elf
+	cp $(USERLAND_BUILD)/sleep2.elf $(INITRAMFS_STAGING)/bin/sleep2.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -570,7 +576,7 @@ sleep 0.25; \
 	sleep 0.20; \
 	printf 'sleep 120 &\n'; \
 	sleep 0.10; \
-	printf 'sleep 120 &\n'; \
+	printf 'sleep2 120 &\n'; \
 	sleep 0.10; \
 	printf 'sleep 120 &\n'; \
 	sleep 0.10; \
@@ -1627,43 +1633,54 @@ printf 'exit\n';)
 qemu-smoke-shell-bg-replay: $(ISO)
 	@mkdir -p $(BUILD)
 	@rm -f $(BUILD)/qemu-smoke-shell-bg-replay.log
-	@echo "[qemu-smoke-shell-bg-replay] Booting headless VM with repeated background pipelines..."
+	@echo "[qemu-smoke-shell-bg-replay] Booting headless VM with concurrent background job replay..."
 	$(call RUN_SCRIPTED_SHELL_SMOKE,qemu-smoke-shell-bg-replay,$(BUILD)/qemu-smoke-shell-bg-replay.log,printf 'cd /bin\n'; \
 sleep 0.25; \
 printf 'sleep 60 | cat &\n'; \
+sleep 0.10; \
+printf 'sleep2 220 &\n'; \
+sleep 0.10; \
+printf 'jobs\n'; \
 sleep 0.20; \
-printf 'echo bg-replay-1\n'; \
-sleep 1.10; \
-printf 'echo settle-1\n'; \
-sleep 0.25; \
-printf 'sleep 60 | cat &\n'; \
+printf 'fg 1\n'; \
+sleep 0.15; \
+printf 'jobs\n'; \
 sleep 0.20; \
-printf 'echo bg-replay-2\n'; \
-sleep 1.10; \
-printf 'echo settle-2\n'; \
-sleep 0.25; \
-printf 'sleep 60 | cat &\n'; \
-sleep 0.20; \
-printf 'echo bg-replay-3\n'; \
-sleep 1.25; \
-printf 'echo settle-3\n'; \
+printf 'fg\n'; \
+sleep 0.15; \
+printf 'wait\n'; \
 sleep 0.25; \
 printf 'exit\n';)
 	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-bg-replay,$(BUILD)/qemu-smoke-shell-bg-replay.log)
-	@if [ "$$(grep -Fc 'bg: started job=' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -ne 3 ]; then \
-		echo "[qemu-smoke-shell-bg-replay] Expected three background launch markers"; \
+	@if [ "$$(grep -Fc 'bg: started job=' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -ne 2 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Expected two background launch markers"; \
 		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
 		exit 1; \
 	fi
-	@if [ "$$(grep -Fc 'bg: done job=' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -ne 3 ]; then \
-		echo "[qemu-smoke-shell-bg-replay] Expected three background completion markers"; \
+	@if [ "$$(grep -Fc 'bg: done job=' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -ne 2 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Expected two background completion markers"; \
 		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
 		exit 1; \
 	fi
-	@if [ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-bg-replay.log | grep -Fxc 'bg-replay-1')" -lt 1 ] || \
-		[ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-bg-replay.log | grep -Fxc 'bg-replay-2')" -lt 1 ] || \
-		[ "$$(tr -d '\r' < $(BUILD)/qemu-smoke-shell-bg-replay.log | grep -Fxc 'bg-replay-3')" -lt 1 ]; then \
-		echo "[qemu-smoke-shell-bg-replay] Missing foreground responsiveness markers"; \
+	@if [ "$$(grep -Fc 'jobs: id=' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Missing jobs builtin listing output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq 'fg: done job=1' $(BUILD)/qemu-smoke-shell-bg-replay.log || \
+		! grep -Fq 'fg: done job=2' $(BUILD)/qemu-smoke-shell-bg-replay.log; then \
+		echo "[qemu-smoke-shell-bg-replay] Missing fg completion for explicit and latest job targets"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'jobs: id=1' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -lt 1 ] || \
+		[ "$$(grep -Fc 'jobs: id=2' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Missing multi-job list output for fg replay"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'wait: no background jobs' $(BUILD)/qemu-smoke-shell-bg-replay.log)" -lt 1 ]; then \
+		echo "[qemu-smoke-shell-bg-replay] Missing no-job wait marker after fg replay"; \
 		tail -n 260 $(BUILD)/qemu-smoke-shell-bg-replay.log; \
 		exit 1; \
 	fi
