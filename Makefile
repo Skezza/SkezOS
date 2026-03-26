@@ -574,6 +574,12 @@ sleep 0.25; \
 	sleep 0.20; \
 	printf 'wait\n'; \
 	sleep 0.20; \
+	printf 'fg\n'; \
+	sleep 0.20; \
+	printf 'fg x\n'; \
+	sleep 0.20; \
+	printf 'fg 99\n'; \
+	sleep 0.20; \
 	printf 'sleep 120 &\n'; \
 	sleep 0.10; \
 	printf 'sleep2 120 &\n'; \
@@ -804,6 +810,21 @@ qemu-smoke-shell-core: $(ISO)
 	fi
 	@if [ "$$(grep -Fc 'wait: no background jobs' $(BUILD)/qemu-smoke-shell-core.log)" -lt 1 ]; then \
 		echo "[qemu-smoke-shell-core] Missing wait no-job marker"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "fg: no background jobs" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing fg no-job marker"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "fg: usage: fg [job_id]" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing fg usage marker for invalid arguments"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "fg: job not found" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing fg not-found marker for unknown job id"; \
 		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi

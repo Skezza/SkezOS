@@ -1889,7 +1889,10 @@ static int shell_run_fg(const char *args, uint32_t args_len) {
     uint32_t have_job_id = 0U;
     uint32_t arg_start = 0U;
     uint32_t arg_end = 0U;
+    int32_t target_last_pid = 0;
+    int32_t target_last_status = 0;
     int32_t status = 0;
+    char cmd_preview[SHELL_LINE_MAX];
     char num[12];
 
     shell_reap_background_jobs_nonblocking();
@@ -1940,12 +1943,18 @@ static int shell_run_fg(const char *args, uint32_t args_len) {
         }
         job_id = target->id;
     }
+    target_last_pid = target->last_pid;
+    target_last_status = target->last_status;
+    shell_bg_copy_preview(cmd_preview, sizeof(cmd_preview), target->cmd_preview);
 
     while (target->used != 0U) {
         int32_t waited = user_waitpid(-1, &status, 0U);
         if (waited <= 0) {
             shell_write_str(kWaitFail);
             return 1;
+        }
+        if (waited == target_last_pid) {
+            target_last_status = status;
         }
         shell_bg_note_reaped(waited, status);
     }
@@ -1954,13 +1963,13 @@ static int shell_run_fg(const char *args, uint32_t args_len) {
     shell_format_u32(num, sizeof(num), job_id);
     shell_write_str(num);
     shell_write_str(kBgPidPrefix);
-    shell_format_i32(num, sizeof(num), target->last_pid);
+    shell_format_i32(num, sizeof(num), target_last_pid);
     shell_write_str(num);
     shell_write_str(kBgStatusPrefix);
-    shell_format_i32(num, sizeof(num), target->last_status);
+    shell_format_i32(num, sizeof(num), target_last_status);
     shell_write_str(num);
     shell_write_str(kBgCmdPrefix);
-    shell_write_str(target->cmd_preview);
+    shell_write_str(cmd_preview);
     shell_write_str(kNewline);
     return 1;
 }
