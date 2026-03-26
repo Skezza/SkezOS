@@ -15,6 +15,7 @@
 #define SHELL_COMPLETION_MAX_MATCHES (SHELL_LS_MAX_ENTRIES + 8U)
 #define SHELL_HISTORY_MAX 8U
 #define SHELL_HISTORY_PERSIST_PATH "/persist/.sh_history"
+#define SHELL_TIMELINE_MAX 24U
 
 struct shell_stage {
     char cmd[SHELL_PATH_MAX];
@@ -43,6 +44,13 @@ struct shell_bg_job {
     char cmd_preview[SHELL_LINE_MAX];
 };
 
+struct shell_timeline_event {
+    uint32_t seq;
+    uint32_t ticks_lo;
+    char tag[16];
+    char detail[SHELL_LINE_MAX];
+};
+
 static char g_shell_line[SHELL_LINE_MAX];
 static char g_shell_path[SHELL_PATH_MAX];
 static char g_shell_cwd[SHELL_CWD_MAX] = "/";
@@ -51,16 +59,21 @@ static struct shell_stage g_shell_stages[SHELL_PIPELINE_MAX];
 static struct syscall_task_snapshot_entry g_shell_ps_tasks[SHELL_PS_MAX_TASKS];
 static struct syscall_dir_entry g_shell_ls_entries[SHELL_LS_MAX_ENTRIES];
 static struct shell_bg_job g_shell_bg_jobs[SHELL_BG_JOB_MAX];
+static struct shell_timeline_event g_shell_timeline[SHELL_TIMELINE_MAX];
 static char g_shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
 static uint32_t g_shell_history_count;
 static uint32_t g_shell_history_head;
 static uint32_t g_shell_history_persist_muted;
 static uint32_t g_shell_history_run_depth;
 static uint32_t g_shell_bg_next_id = 1U;
+static uint32_t g_shell_timeline_head;
+static uint32_t g_shell_timeline_count;
+static uint32_t g_shell_timeline_next_seq = 1U;
+static uint32_t g_shell_theme_ansi;
 
 static const char kBanner[] = "SkezOS shell ready\nType 'help' for commands.\n";
 static const char kHelp[] =
-    "builtins: help history [clear|run N] ps ls pwd cd jobs fg [job_id] wait exit\n"
+    "builtins: help history [clear|run N] ps ls pwd cd jobs fg [job_id] wait timeline [N] replay [N] set theme [plain|ansi] exit\n"
     "run: <name> -> /bin/<name>.elf, ./tool uses cwd, pipeline/redir supported, suffix '&' for background\n"
     "jobs: list tracked background pipelines, fg waits one job, wait drains all tracked jobs\n"
     "hist: !!/!N/!-N/!prefix/!?term/^old^new^ recalls history\n"
@@ -103,6 +116,21 @@ static const char kFgUsage[] = "fg: usage: fg [job_id]\n";
 static const char kFgNoJobs[] = "fg: no background jobs\n";
 static const char kFgNotFound[] = "fg: job not found\n";
 static const char kFgDonePrefix[] = "fg: done job=";
+static const char kTimelineUsage[] = "timeline: usage: timeline [count]\n";
+static const char kTimelineEmpty[] = "timeline: empty\n";
+static const char kTimelinePrefix[] = "timeline: seq=";
+static const char kTimelineTicksPrefix[] = " ticks=";
+static const char kTimelineTagPrefix[] = " tag=";
+static const char kTimelineDetailPrefix[] = " detail=";
+static const char kReplayUsage[] = "replay: usage: replay [count]\n";
+static const char kReplayEmpty[] = "replay: empty\n";
+static const char kReplayPrefix[] = "replay: seq=";
+static const char kSetUsage[] = "set: usage: set theme [plain|ansi]\n";
+static const char kSetThemePrefix[] = "set: theme=";
+static const char kSetThemePlain[] = "plain\n";
+static const char kSetThemeAnsi[] = "ansi\n";
+static const char kAnsiCyan[] = "\x1b[36m";
+static const char kAnsiReset[] = "\x1b[0m";
 static const char kExit[] = "sh: exit\n";
 static const char kNewline[] = "\n";
 static const char kEraseOne[] = "\b \b";
@@ -117,10 +145,14 @@ static const char *kShellCompletionBuiltins[] = {
     "cd",
     "jobs",
     "fg",
+    "timeline",
+    "replay",
+    "set",
     "exit",
 };
 
 static uint32_t shell_skip_spaces(const char *s, uint32_t idx);
+static uint32_t shell_token_end(const char *s, uint32_t idx);
 static int shell_is_meta_char(char ch);
 static int shell_should_escape_spawn_char(char ch);
 static int shell_append_escaped_arg(char *dst,
@@ -136,6 +168,9 @@ static void shell_drain_background_jobs(void);
 static void shell_bg_note_reaped(int32_t pid, int32_t status);
 static int shell_run_jobs(void);
 static int shell_run_fg(const char *args, uint32_t args_len);
+static int shell_run_timeline(const char *args, uint32_t args_len);
+static int shell_run_replay(const char *args, uint32_t args_len);
+static int shell_run_set(const char *args, uint32_t args_len);
 static int shell_history_search(const char *query,
                                 uint32_t query_len,
                                 uint32_t start_offset,
@@ -267,6 +302,95 @@ static void shell_write_padded(const char *text, uint32_t width) {
     }
 }
 
+static void shell_copy_text(char *dst, uint32_t cap, const char *src) {
+    uint32_t i = 0U;
+
+    if (!dst || cap == 0U) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!src) {
+        return;
+    }
+    while (src[i] != '\0' && i + 1U < cap) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+static uint32_t shell_now_ticks_lo(void) {
+    struct syscall_time_info info;
+
+    if (user_time_info(&info) < 0) {
+        return 0U;
+    }
+    return info.ticks_lo;
+}
+
+static void shell_timeline_record(const char *tag, const char *detail) {
+    struct shell_timeline_event *ev = &g_shell_timeline[g_shell_timeline_head];
+
+    ev->seq = g_shell_timeline_next_seq++;
+    if (g_shell_timeline_next_seq == 0U) {
+        g_shell_timeline_next_seq = 1U;
+    }
+    ev->ticks_lo = shell_now_ticks_lo();
+    shell_copy_text(ev->tag, sizeof(ev->tag), tag);
+    shell_copy_text(ev->detail, sizeof(ev->detail), detail);
+
+    g_shell_timeline_head = (g_shell_timeline_head + 1U) % SHELL_TIMELINE_MAX;
+    if (g_shell_timeline_count < SHELL_TIMELINE_MAX) {
+        g_shell_timeline_count++;
+    }
+}
+
+static int shell_parse_optional_count(const char *args,
+                                      uint32_t args_len,
+                                      uint32_t *out_count,
+                                      uint32_t default_count,
+                                      uint32_t max_count) {
+    uint32_t start;
+    uint32_t end;
+    uint32_t value = 0U;
+
+    if (!out_count) {
+        return -1;
+    }
+    *out_count = default_count;
+    if (!args) {
+        return 0;
+    }
+
+    start = shell_skip_spaces(args, 0U);
+    if (start >= args_len || args[start] == '\0') {
+        return 0;
+    }
+    end = shell_token_end(args, start);
+    if (shell_skip_spaces(args, end) != args_len) {
+        return -1;
+    }
+    for (uint32_t i = start; i < end; i++) {
+        uint32_t digit;
+        if (args[i] < '0' || args[i] > '9') {
+            return -1;
+        }
+        digit = (uint32_t)(args[i] - '0');
+        if (value > 429496729U || (value == 429496729U && digit > 5U)) {
+            return -1;
+        }
+        value = value * 10U + digit;
+    }
+    if (value == 0U) {
+        return -1;
+    }
+    if (value > max_count) {
+        value = max_count;
+    }
+    *out_count = value;
+    return 0;
+}
+
 static void shell_append_prompt_text(char *buf,
                                      uint32_t cap,
                                      uint32_t *len,
@@ -301,7 +425,14 @@ static const char *shell_build_prompt(void) {
     uint32_t len = 0U;
 
     g_shell_prompt[0] = '\0';
-    shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, "sh> ");
+    if (g_shell_theme_ansi != 0U) {
+        shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, kAnsiCyan);
+    }
+    shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, "sh>");
+    if (g_shell_theme_ansi != 0U) {
+        shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, kAnsiReset);
+    }
+    shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, " ");
     shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, shell_prompt_path());
     shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, " ");
     shell_append_prompt_text(g_shell_prompt, sizeof(g_shell_prompt), &len, shell_prompt_mark());
@@ -1482,6 +1613,9 @@ static int shell_is_builtin_name(const char *cmd, uint32_t cmd_len) {
            user_str_eq_n(cmd, "history", cmd_len) ||
            user_str_eq_n(cmd, "jobs", cmd_len) ||
            user_str_eq_n(cmd, "fg", cmd_len) ||
+           user_str_eq_n(cmd, "timeline", cmd_len) ||
+           user_str_eq_n(cmd, "replay", cmd_len) ||
+           user_str_eq_n(cmd, "set", cmd_len) ||
            user_str_eq_n(cmd, "wait", cmd_len) ||
            user_str_eq_n(cmd, "ps", cmd_len) ||
            user_str_eq_n(cmd, "ls", cmd_len) ||
@@ -1796,6 +1930,7 @@ static void shell_bg_print_started(const struct shell_bg_job *job) {
     shell_write_str(kBgCmdPrefix);
     shell_write_str(job->cmd_preview);
     shell_write_str(kNewline);
+    shell_timeline_record("bg-start", job->cmd_preview);
 }
 
 static void shell_bg_print_done(const struct shell_bg_job *job) {
@@ -1816,6 +1951,7 @@ static void shell_bg_print_done(const struct shell_bg_job *job) {
     shell_write_str(kBgCmdPrefix);
     shell_write_str(job->cmd_preview);
     shell_write_str(kNewline);
+    shell_timeline_record("bg-done", job->cmd_preview);
 }
 
 static void shell_bg_print_overflow(const char *cmd_preview) {
@@ -1824,6 +1960,7 @@ static void shell_bg_print_overflow(const char *cmd_preview) {
         shell_write_str(cmd_preview);
     }
     shell_write_str(kNewline);
+    shell_timeline_record("bg-overflow", cmd_preview ? cmd_preview : "");
 }
 
 static struct shell_bg_job *shell_bg_find_latest_job(void) {
@@ -1906,6 +2043,7 @@ static int shell_run_fg(const char *args, uint32_t args_len) {
         arg_end = shell_token_end(args, arg_start);
         if (shell_skip_spaces(args, arg_end) != args_len) {
             shell_write_str(kFgUsage);
+            shell_timeline_record("fg-usage", args);
             return 1;
         }
 
@@ -1913,17 +2051,20 @@ static int shell_run_fg(const char *args, uint32_t args_len) {
             uint32_t digit;
             if (args[i] < '0' || args[i] > '9') {
                 shell_write_str(kFgUsage);
+                shell_timeline_record("fg-usage", args);
                 return 1;
             }
             digit = (uint32_t)(args[i] - '0');
             if (job_id > 429496729U || (job_id == 429496729U && digit > 5U)) {
                 shell_write_str(kFgUsage);
+                shell_timeline_record("fg-usage", args);
                 return 1;
             }
             job_id = job_id * 10U + digit;
         }
         if (job_id == 0U) {
             shell_write_str(kFgUsage);
+            shell_timeline_record("fg-usage", args);
             return 1;
         }
         have_job_id = 1U;
@@ -1933,12 +2074,14 @@ static int shell_run_fg(const char *args, uint32_t args_len) {
         target = shell_bg_find_job_by_id(job_id);
         if (!target) {
             shell_write_str(kFgNotFound);
+            shell_timeline_record("fg-miss", args);
             return 1;
         }
     } else {
         target = shell_bg_find_latest_job();
         if (!target) {
             shell_write_str(kFgNoJobs);
+            shell_timeline_record("fg-empty", "");
             return 1;
         }
         job_id = target->id;
@@ -1971,6 +2114,133 @@ static int shell_run_fg(const char *args, uint32_t args_len) {
     shell_write_str(kBgCmdPrefix);
     shell_write_str(cmd_preview);
     shell_write_str(kNewline);
+    shell_timeline_record("fg-done", cmd_preview);
+    return 1;
+}
+
+static int shell_run_timeline(const char *args, uint32_t args_len) {
+    uint32_t count = 8U;
+    char num[12];
+
+    if (shell_parse_optional_count(args, args_len, &count, 8U, SHELL_TIMELINE_MAX) < 0) {
+        shell_write_str(kTimelineUsage);
+        return 1;
+    }
+    if (g_shell_timeline_count == 0U) {
+        shell_write_str(kTimelineEmpty);
+        return 1;
+    }
+    if (count > g_shell_timeline_count) {
+        count = g_shell_timeline_count;
+    }
+
+    for (uint32_t i = 0U; i < count; i++) {
+        uint32_t idx = (g_shell_timeline_head + SHELL_TIMELINE_MAX - 1U - i) % SHELL_TIMELINE_MAX;
+        const struct shell_timeline_event *ev = &g_shell_timeline[idx];
+
+        shell_write_str(kTimelinePrefix);
+        shell_format_u32(num, sizeof(num), ev->seq);
+        shell_write_str(num);
+        shell_write_str(kTimelineTicksPrefix);
+        shell_format_u32(num, sizeof(num), ev->ticks_lo);
+        shell_write_str(num);
+        shell_write_str(kTimelineTagPrefix);
+        shell_write_str(ev->tag);
+        if (ev->detail[0] != '\0') {
+            shell_write_str(kTimelineDetailPrefix);
+            shell_write_str(ev->detail);
+        }
+        shell_write_str(kNewline);
+    }
+    return 1;
+}
+
+static int shell_run_replay(const char *args, uint32_t args_len) {
+    uint32_t count = 8U;
+    uint32_t start_offset;
+    char num[12];
+
+    if (shell_parse_optional_count(args, args_len, &count, 8U, SHELL_TIMELINE_MAX) < 0) {
+        shell_write_str(kReplayUsage);
+        return 1;
+    }
+    if (g_shell_timeline_count == 0U) {
+        shell_write_str(kReplayEmpty);
+        return 1;
+    }
+    if (count > g_shell_timeline_count) {
+        count = g_shell_timeline_count;
+    }
+    start_offset = g_shell_timeline_count - count;
+
+    for (uint32_t offset = start_offset; offset < g_shell_timeline_count; offset++) {
+        uint32_t idx = (g_shell_timeline_head + SHELL_TIMELINE_MAX - g_shell_timeline_count + offset) %
+                       SHELL_TIMELINE_MAX;
+        const struct shell_timeline_event *ev = &g_shell_timeline[idx];
+
+        shell_write_str(kReplayPrefix);
+        shell_format_u32(num, sizeof(num), ev->seq);
+        shell_write_str(num);
+        shell_write_str(kTimelineTicksPrefix);
+        shell_format_u32(num, sizeof(num), ev->ticks_lo);
+        shell_write_str(num);
+        shell_write_str(kTimelineTagPrefix);
+        shell_write_str(ev->tag);
+        if (ev->detail[0] != '\0') {
+            shell_write_str(kTimelineDetailPrefix);
+            shell_write_str(ev->detail);
+        }
+        shell_write_str(kNewline);
+    }
+    return 1;
+}
+
+static int shell_run_set(const char *args, uint32_t args_len) {
+    uint32_t arg_start;
+    uint32_t arg_end;
+    uint32_t val_start;
+    uint32_t val_end;
+
+    if (!args) {
+        args = "";
+        args_len = 0U;
+    }
+    arg_start = shell_skip_spaces(args, 0U);
+    if (arg_start >= args_len || args[arg_start] == '\0') {
+        shell_write_str(kSetThemePrefix);
+        shell_write_str(g_shell_theme_ansi != 0U ? kSetThemeAnsi : kSetThemePlain);
+        shell_timeline_record("set-theme", g_shell_theme_ansi != 0U ? "ansi" : "plain");
+        return 1;
+    }
+
+    arg_end = shell_token_end(args, arg_start);
+    if (!user_str_eq_n(args + arg_start, "theme", arg_end - arg_start)) {
+        shell_write_str(kSetUsage);
+        return 1;
+    }
+    val_start = shell_skip_spaces(args, arg_end);
+    if (val_start >= args_len || args[val_start] == '\0') {
+        shell_write_str(kSetThemePrefix);
+        shell_write_str(g_shell_theme_ansi != 0U ? kSetThemeAnsi : kSetThemePlain);
+        shell_timeline_record("set-theme", g_shell_theme_ansi != 0U ? "ansi" : "plain");
+        return 1;
+    }
+    val_end = shell_token_end(args, val_start);
+    if (shell_skip_spaces(args, val_end) != args_len) {
+        shell_write_str(kSetUsage);
+        return 1;
+    }
+    if (user_str_eq_n(args + val_start, "plain", val_end - val_start)) {
+        g_shell_theme_ansi = 0U;
+    } else if (user_str_eq_n(args + val_start, "ansi", val_end - val_start)) {
+        g_shell_theme_ansi = 1U;
+    } else {
+        shell_write_str(kSetUsage);
+        return 1;
+    }
+    shell_write_str(kSetThemePrefix);
+    shell_write_str(g_shell_theme_ansi != 0U ? kSetThemeAnsi : kSetThemePlain);
+    shell_timeline_record("set-theme", g_shell_theme_ansi != 0U ? "ansi" : "plain");
     return 1;
 }
 
@@ -2062,10 +2332,12 @@ static void shell_drain_background_jobs(void) {
 static void shell_wait_background_jobs(void) {
     if (!shell_bg_has_active_jobs()) {
         shell_write_str(kWaitStub);
+        shell_timeline_record("wait-empty", "");
         return;
     }
     shell_drain_background_jobs();
     shell_write_str(kWaitDone);
+    shell_timeline_record("wait-done", "");
 }
 
 static int shell_execute_pipeline(struct shell_stage *stages,
@@ -2620,6 +2892,15 @@ static int shell_dispatch_builtin(struct shell_stage *stage) {
     if (user_str_eq_n(stage->cmd, "fg", stage->cmd_len)) {
         return shell_run_fg(stage->cmdline, stage->cmdline_len);
     }
+    if (user_str_eq_n(stage->cmd, "timeline", stage->cmd_len)) {
+        return shell_run_timeline(stage->cmdline, stage->cmdline_len);
+    }
+    if (user_str_eq_n(stage->cmd, "replay", stage->cmd_len)) {
+        return shell_run_replay(stage->cmdline, stage->cmdline_len);
+    }
+    if (user_str_eq_n(stage->cmd, "set", stage->cmd_len)) {
+        return shell_run_set(stage->cmdline, stage->cmdline_len);
+    }
     if (user_str_eq_n(stage->cmd, "wait", stage->cmd_len)) {
         shell_wait_background_jobs();
         return 1;
@@ -2665,6 +2946,7 @@ static int shell_dispatch_line(char *line) {
                             &background);
     if (rc < 0) {
         shell_write_str(kParseFail);
+        shell_timeline_record("parse-fail", line);
         return 1;
     }
     if (stage_count == 0U) {
@@ -2673,15 +2955,18 @@ static int shell_dispatch_line(char *line) {
 
     if (stage_count == 1U && !has_meta &&
         shell_is_builtin_name(g_shell_stages[0].cmd, g_shell_stages[0].cmd_len)) {
+        shell_timeline_record("builtin", g_shell_stages[0].cmd);
         return shell_dispatch_builtin(&g_shell_stages[0]);
     }
     for (uint32_t i = 0U; i < stage_count; i++) {
         if (shell_is_builtin_name(g_shell_stages[i].cmd, g_shell_stages[i].cmd_len)) {
             shell_write_str(kBuiltinPipeRedirect);
+            shell_timeline_record("builtin-meta", g_shell_stages[i].cmd);
             return 1;
         }
     }
 
+    shell_timeline_record(background != 0U ? "run-bg" : "run-fg", line);
     (void)shell_execute_pipeline(g_shell_stages, stage_count, background, line);
     return 1;
 }

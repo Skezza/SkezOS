@@ -506,6 +506,14 @@ printf 'stdin handoff worzz\b\bks\n'; \
 sleep 0.25; \
 printf 'ps\n'; \
 sleep 0.25; \
+printf 'timeline 5\n'; \
+sleep 0.20; \
+printf 'set theme ansi\n'; \
+sleep 0.20; \
+printf 'set theme plain\n'; \
+sleep 0.20; \
+printf 'replay 3\n'; \
+sleep 0.20; \
 printf 'echo shell core interactive echo\n'; \
 sleep 0.25; \
 printf '\022\n'; \
@@ -751,6 +759,22 @@ qemu-smoke-shell-core: $(ISO)
 	@if ! grep -Fq "PID  PPID  MODE" $(BUILD)/qemu-smoke-shell-core.log; then \
 		echo "[qemu-smoke-shell-core] Missing ps task snapshot output"; \
 		tail -n 220 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "timeline: seq=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing timeline builtin output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "set: theme=ansi" $(BUILD)/qemu-smoke-shell-core.log || \
+		! grep -Fq "set: theme=plain" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing set theme toggle output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "replay: seq=" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing replay builtin output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
 	@if [ "$$(grep -Fc 'shell core interactive echo' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
