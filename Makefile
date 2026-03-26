@@ -514,6 +514,14 @@ printf 'set theme plain\n'; \
 sleep 0.20; \
 printf 'replay 3\n'; \
 sleep 0.20; \
+printf 'hud\n'; \
+sleep 0.20; \
+printf 'set hud on\n'; \
+sleep 0.20; \
+printf 'echo hud-live\n'; \
+sleep 0.20; \
+printf 'set hud off\n'; \
+sleep 0.20; \
 printf 'echo shell core interactive echo\n'; \
 sleep 0.25; \
 printf '\022\n'; \
@@ -775,6 +783,22 @@ qemu-smoke-shell-core: $(ISO)
 	@if ! grep -Fq "replay: seq=" $(BUILD)/qemu-smoke-shell-core.log; then \
 		echo "[qemu-smoke-shell-core] Missing replay builtin output"; \
 		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "set: hud=on" $(BUILD)/qemu-smoke-shell-core.log || \
+		! grep -Fq "set: hud=off" $(BUILD)/qemu-smoke-shell-core.log; then \
+		echo "[qemu-smoke-shell-core] Missing set hud toggle output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if [ "$$(grep -Fc 'hud: jobs=' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
+		echo "[qemu-smoke-shell-core] Missing hud status line output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fxq "hud-live"; then \
+		echo "[qemu-smoke-shell-core] Missing hud-on live marker output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
 	@if [ "$$(grep -Fc 'shell core interactive echo' $(BUILD)/qemu-smoke-shell-core.log)" -lt 2 ]; then \
