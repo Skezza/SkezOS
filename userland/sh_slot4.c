@@ -16,6 +16,18 @@
 #define SHELL_HISTORY_MAX 8U
 #define SHELL_HISTORY_PERSIST_PATH "/persist/.sh_history"
 #define SHELL_TIMELINE_MAX 24U
+#define SHELL_VAR_MAX 16U
+#define SHELL_VAR_NAME_MAX 24U
+#define SHELL_VAR_VALUE_MAX 96U
+#define SHELL_SCRIPT_CHUNK_MAX 64U
+#define SHELL_SCRIPT_DEPTH_MAX 8U
+
+enum shell_chain_op {
+    SHELL_CHAIN_NONE = 0,
+    SHELL_CHAIN_SEQ = 1,
+    SHELL_CHAIN_AND = 2,
+    SHELL_CHAIN_OR = 3,
+};
 
 struct shell_stage {
     char cmd[SHELL_PATH_MAX];
@@ -51,6 +63,13 @@ struct shell_timeline_event {
     char detail[SHELL_LINE_MAX];
 };
 
+struct shell_var {
+    uint32_t used;
+    uint32_t exported;
+    char name[SHELL_VAR_NAME_MAX];
+    char value[SHELL_VAR_VALUE_MAX];
+};
+
 static char g_shell_line[SHELL_LINE_MAX];
 static char g_shell_path[SHELL_PATH_MAX];
 static char g_shell_cwd[SHELL_CWD_MAX] = "/";
@@ -60,6 +79,7 @@ static struct syscall_task_snapshot_entry g_shell_ps_tasks[SHELL_PS_MAX_TASKS];
 static struct syscall_dir_entry g_shell_ls_entries[SHELL_LS_MAX_ENTRIES];
 static struct shell_bg_job g_shell_bg_jobs[SHELL_BG_JOB_MAX];
 static struct shell_timeline_event g_shell_timeline[SHELL_TIMELINE_MAX];
+static struct shell_var g_shell_vars[SHELL_VAR_MAX];
 static char g_shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
 static uint32_t g_shell_history_count;
 static uint32_t g_shell_history_head;
@@ -74,11 +94,15 @@ static uint32_t g_shell_hud_enabled;
 static uint32_t g_shell_last_cmd_ticks;
 static uint32_t g_shell_last_cmd_health;
 static uint32_t g_shell_ansi_supported;
+static uint32_t g_shell_script_depth;
+static int32_t g_shell_last_status;
 
 static const char kBanner[] = "SkezOS shell ready\nType 'help' for commands.\n";
 static const char kHelp[] =
-    "builtins: help history [clear|run N] ps ls pwd cd jobs fg [job_id] wait timeline [N] replay [N] hud [on|off] set theme|hud ... exit\n"
+    "builtins: help history [clear|run N] ps ls pwd cd jobs fg [job_id] wait timeline [N] replay [N] hud [on|off] set theme|hud ... sh source export exit\n"
     "run: <name> -> /bin/<name>.elf, ./tool uses cwd, pipeline/redir supported, suffix '&' for background\n"
+    "ops: ';' '&&' '||' chaining supported, NAME=value and $NAME expansion supported\n"
+    "scripts: source <path>, sh <path> (script mode), auto-runs /persist/rc.sh at boot when present\n"
     "jobs: list tracked background pipelines, fg waits one job, wait drains all tracked jobs, hud shows shell status\n"
     "hist: !!/!N/!-N/!prefix/!?term/^old^new^ recalls history\n"
     "edit: BS deletes, Ctrl+W word, Ctrl+U line, Esc/Ctrl+P history, Ctrl+N forward, Tab completes commands, Ctrl+R search\n";
@@ -143,6 +167,14 @@ static const char kSetThemeAnsiFallback[] = "set: ansi unsupported on this conso
 static const char kSetHudPrefix[] = "set: hud=";
 static const char kSetHudOn[] = "on\n";
 static const char kSetHudOff[] = "off\n";
+static const char kSourceUsage[] = "source: usage: source <path>\n";
+static const char kSourceFail[] = "source: open failed\n";
+static const char kSourceDepthExceeded[] = "source: nesting depth exceeded\n";
+static const char kSourceParseFail[] = "source: parse failed\n";
+static const char kExportUsage[] = "export: usage: export NAME[=VALUE]\n";
+static const char kExportPrefix[] = "export ";
+static const char kExportEmpty[] = "export: empty\n";
+static const char kRcRun[] = "rc: running /persist/rc.sh\n";
 static const char kHealthOk[] = "ok";
 static const char kHealthWarn[] = "warn";
 static const char kHealthSlow[] = "slow";
@@ -166,6 +198,9 @@ static const char *kShellCompletionBuiltins[] = {
     "replay",
     "hud",
     "set",
+    "sh",
+    "source",
+    "export",
     "exit",
 };
 
@@ -180,7 +215,6 @@ static int shell_append_escaped_arg(char *dst,
                                     uint32_t arg_len);
 static int shell_str_contains_char_n(const char *s, uint32_t len, char ch);
 static int shell_history_handle_command(const char *args, uint32_t args_len);
-static int shell_dispatch_line(char *line);
 static void shell_reap_background_jobs_nonblocking(void);
 static void shell_drain_background_jobs(void);
 static void shell_bg_note_reaped(int32_t pid, int32_t status);
@@ -190,6 +224,8 @@ static int shell_run_timeline(const char *args, uint32_t args_len);
 static int shell_run_replay(const char *args, uint32_t args_len);
 static int shell_run_hud(const char *args, uint32_t args_len);
 static int shell_run_set(const char *args, uint32_t args_len);
+static int shell_run_source(const char *args, uint32_t args_len, int interactive);
+static int shell_run_export(const char *args, uint32_t args_len);
 static int shell_history_search(const char *query,
                                 uint32_t query_len,
                                 uint32_t start_offset,
@@ -203,6 +239,7 @@ static int shell_history_find_match_from_offset(const char *prefix,
                                                 const char **out_line,
                                                 uint32_t *out_len,
                                                 uint32_t *out_offset);
+static int shell_dispatch_line(char *line, int *out_status);
 
 static void shell_write_all(const char *buf, uint32_t len) {
     while (len > 0U) {
@@ -336,6 +373,259 @@ static void shell_copy_text(char *dst, uint32_t cap, const char *src) {
         i++;
     }
     dst[i] = '\0';
+}
+
+static int shell_is_name_start_char(char ch) {
+    return (ch >= 'A' && ch <= 'Z') ||
+           (ch >= 'a' && ch <= 'z') ||
+           ch == '_';
+}
+
+static int shell_is_name_char(char ch) {
+    return shell_is_name_start_char(ch) || (ch >= '0' && ch <= '9');
+}
+
+static int shell_var_find_slot(const char *name, uint32_t name_len) {
+    if (!name || name_len == 0U) {
+        return -1;
+    }
+    for (uint32_t i = 0U; i < SHELL_VAR_MAX; i++) {
+        uint32_t len = user_strlen(g_shell_vars[i].name);
+        if (g_shell_vars[i].used == 0U || len != name_len) {
+            continue;
+        }
+        if (user_str_eq_n(name, g_shell_vars[i].name, name_len)) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int shell_var_alloc_slot(void) {
+    for (uint32_t i = 0U; i < SHELL_VAR_MAX; i++) {
+        if (g_shell_vars[i].used == 0U) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int shell_var_put(const char *name,
+                         uint32_t name_len,
+                         const char *value,
+                         uint32_t value_len,
+                         int set_export,
+                         uint32_t export_value) {
+    int slot;
+
+    if (!name || name_len == 0U || name_len + 1U > SHELL_VAR_NAME_MAX) {
+        return -1;
+    }
+    if (value_len + 1U > SHELL_VAR_VALUE_MAX) {
+        return -1;
+    }
+    slot = shell_var_find_slot(name, name_len);
+    if (slot < 0) {
+        slot = shell_var_alloc_slot();
+        if (slot < 0) {
+            return -1;
+        }
+        g_shell_vars[slot].used = 1U;
+        g_shell_vars[slot].exported = 0U;
+        user_memcpy(g_shell_vars[slot].name, name, name_len);
+        g_shell_vars[slot].name[name_len] = '\0';
+    }
+    if (set_export != 0) {
+        g_shell_vars[slot].exported = export_value != 0U ? 1U : 0U;
+    }
+    if (value_len != 0U) {
+        user_memcpy(g_shell_vars[slot].value, value, value_len);
+    }
+    g_shell_vars[slot].value[value_len] = '\0';
+    return 0;
+}
+
+static int shell_var_mark_exported(const char *name, uint32_t name_len) {
+    int slot;
+
+    if (!name || name_len == 0U || name_len + 1U > SHELL_VAR_NAME_MAX) {
+        return -1;
+    }
+    slot = shell_var_find_slot(name, name_len);
+    if (slot < 0) {
+        if (shell_var_put(name, name_len, "", 0U, 1, 1U) < 0) {
+            return -1;
+        }
+        return 0;
+    }
+    g_shell_vars[slot].exported = 1U;
+    return 0;
+}
+
+static const char *shell_var_get(const char *name, uint32_t name_len) {
+    int slot = shell_var_find_slot(name, name_len);
+    if (slot < 0) {
+        return 0;
+    }
+    return g_shell_vars[slot].value;
+}
+
+static int shell_parse_assignment_token(const char *token,
+                                        uint32_t token_len,
+                                        uint32_t *out_eq_idx) {
+    uint32_t eq = 0U;
+
+    if (!token || token_len < 3U || !out_eq_idx) {
+        return -1;
+    }
+    for (; eq < token_len; eq++) {
+        if (token[eq] == '=') {
+            break;
+        }
+    }
+    if (eq == 0U || eq >= token_len) {
+        return -1;
+    }
+    if (!shell_is_name_start_char(token[0])) {
+        return -1;
+    }
+    for (uint32_t i = 1U; i < eq; i++) {
+        if (!shell_is_name_char(token[i])) {
+            return -1;
+        }
+    }
+    *out_eq_idx = eq;
+    return 0;
+}
+
+static int shell_apply_assignment_token(const char *token, uint32_t token_len, uint32_t exported) {
+    uint32_t eq = 0U;
+
+    if (shell_parse_assignment_token(token, token_len, &eq) < 0) {
+        return -1;
+    }
+    return shell_var_put(token, eq, token + eq + 1U, token_len - (eq + 1U), 1, exported != 0U);
+}
+
+static int shell_expand_vars(const char *src, char *dst, uint32_t cap) {
+    uint32_t i = 0U;
+    uint32_t out = 0U;
+    int in_single = 0;
+    int in_double = 0;
+
+    if (!src || !dst || cap == 0U) {
+        return -1;
+    }
+    while (src[i] != '\0') {
+        char ch = src[i];
+
+        if (ch == '\\') {
+            if (out + 1U >= cap) {
+                return -1;
+            }
+            dst[out++] = src[i++];
+            if (src[i] == '\0') {
+                break;
+            }
+            if (out + 1U >= cap) {
+                return -1;
+            }
+            dst[out++] = src[i++];
+            continue;
+        }
+        if (!in_double && ch == '\'') {
+            if (out + 1U >= cap) {
+                return -1;
+            }
+            in_single = !in_single;
+            dst[out++] = src[i++];
+            continue;
+        }
+        if (!in_single && ch == '"') {
+            if (out + 1U >= cap) {
+                return -1;
+            }
+            in_double = !in_double;
+            dst[out++] = src[i++];
+            continue;
+        }
+        if (!in_single && ch == '$') {
+            uint32_t start;
+            uint32_t end;
+            const char *value;
+
+            if (src[i + 1U] == '?') {
+                char num[16];
+                uint32_t len = shell_format_i32(num, sizeof(num), g_shell_last_status);
+                if (out + len + 1U > cap) {
+                    return -1;
+                }
+                if (len != 0U) {
+                    user_memcpy(dst + out, num, len);
+                    out += len;
+                }
+                i += 2U;
+                continue;
+            }
+            if (src[i + 1U] == '{') {
+                start = i + 2U;
+                end = start;
+                while (src[end] != '\0' && src[end] != '}') {
+                    end++;
+                }
+                if (src[end] != '}' || end == start || !shell_is_name_start_char(src[start])) {
+                    return -1;
+                }
+                for (uint32_t k = start + 1U; k < end; k++) {
+                    if (!shell_is_name_char(src[k])) {
+                        return -1;
+                    }
+                }
+                value = shell_var_get(src + start, end - start);
+                if (value) {
+                    uint32_t len = user_strlen(value);
+                    if (out + len + 1U > cap) {
+                        return -1;
+                    }
+                    if (len != 0U) {
+                        user_memcpy(dst + out, value, len);
+                        out += len;
+                    }
+                }
+                i = end + 1U;
+                continue;
+            }
+            if (shell_is_name_start_char(src[i + 1U])) {
+                start = i + 1U;
+                end = start + 1U;
+                while (shell_is_name_char(src[end])) {
+                    end++;
+                }
+                value = shell_var_get(src + start, end - start);
+                if (value) {
+                    uint32_t len = user_strlen(value);
+                    if (out + len + 1U > cap) {
+                        return -1;
+                    }
+                    if (len != 0U) {
+                        user_memcpy(dst + out, value, len);
+                        out += len;
+                    }
+                }
+                i = end;
+                continue;
+            }
+        }
+        if (out + 1U >= cap) {
+            return -1;
+        }
+        dst[out++] = src[i++];
+    }
+    if (in_single || in_double) {
+        return -1;
+    }
+    dst[out] = '\0';
+    return 0;
 }
 
 static uint32_t shell_now_ticks_lo(void) {
@@ -1430,7 +1720,7 @@ static int shell_str_contains_char_n(const char *s, uint32_t len, char ch) {
 }
 
 static int shell_is_meta_char(char ch) {
-    return ch == '|' || ch == '<' || ch == '>' || ch == '&';
+    return ch == '|' || ch == '<' || ch == '>' || ch == '&' || ch == ';';
 }
 
 static int shell_should_escape_spawn_char(char ch) {
@@ -1732,6 +2022,9 @@ static int shell_is_builtin_name(const char *cmd, uint32_t cmd_len) {
            user_str_eq_n(cmd, "replay", cmd_len) ||
            user_str_eq_n(cmd, "hud", cmd_len) ||
            user_str_eq_n(cmd, "set", cmd_len) ||
+           user_str_eq_n(cmd, "sh", cmd_len) ||
+           user_str_eq_n(cmd, "source", cmd_len) ||
+           user_str_eq_n(cmd, "export", cmd_len) ||
            user_str_eq_n(cmd, "wait", cmd_len) ||
            user_str_eq_n(cmd, "ps", cmd_len) ||
            user_str_eq_n(cmd, "ls", cmd_len) ||
@@ -2410,6 +2703,322 @@ static int shell_run_set(const char *args, uint32_t args_len) {
     return 1;
 }
 
+static int shell_parse_single_arg_token(const char *args,
+                                        uint32_t args_len,
+                                        char *out,
+                                        uint32_t out_cap) {
+    char tok[SHELL_LINE_MAX];
+    uint32_t idx = 0U;
+    uint32_t tok_len = 0U;
+    enum shell_token_kind kind;
+
+    if (!out || out_cap == 0U) {
+        return -1;
+    }
+    out[0] = '\0';
+    if (!args || args_len == 0U) {
+        return -1;
+    }
+    kind = shell_next_token(args, &idx, tok, sizeof(tok), &tok_len);
+    if (kind != SHELL_TOK_WORD || tok_len == 0U || tok_len + 1U > out_cap) {
+        return -1;
+    }
+    if (shell_next_token(args, &idx, tok, sizeof(tok), &tok_len) != SHELL_TOK_NONE) {
+        return -1;
+    }
+    user_memcpy(out, tok, tok_len);
+    out[tok_len] = '\0';
+    return 0;
+}
+
+static int shell_trim_line(char *line, uint32_t *out_len) {
+    uint32_t start;
+    uint32_t len;
+    uint32_t end;
+
+    if (!line || !out_len) {
+        return -1;
+    }
+    len = user_strlen(line);
+    start = shell_skip_spaces(line, 0U);
+    end = len;
+    while (end > start && user_is_space(line[end - 1U])) {
+        end--;
+    }
+    if (start != 0U && end > start) {
+        user_memcpy(line, line + start, end - start);
+    }
+    if (end <= start) {
+        line[0] = '\0';
+        *out_len = 0U;
+        return 0;
+    }
+    line[end - start] = '\0';
+    *out_len = end - start;
+    return 0;
+}
+
+static int shell_run_script_path(const char *path, uint32_t path_len, int interactive, int *out_status) {
+    char chunk[SHELL_SCRIPT_CHUNK_MAX];
+    char line[SHELL_LINE_MAX];
+    uint32_t line_len = 0U;
+    uint32_t line_overflow = 0U;
+    int32_t fd;
+    int last_status = 0;
+    int keep_running = 1;
+
+    if (out_status) {
+        *out_status = 1;
+    }
+    if (!path || path_len == 0U) {
+        if (interactive != 0) {
+            shell_write_str(kSourceUsage);
+        }
+        return 1;
+    }
+    if (g_shell_script_depth >= SHELL_SCRIPT_DEPTH_MAX) {
+        if (interactive != 0) {
+            shell_write_str(kSourceDepthExceeded);
+        }
+        return 1;
+    }
+    fd = user_open(path, path_len, SYSCALL_OPEN_FLAG_READ);
+    if (fd < 0) {
+        if (interactive != 0) {
+            shell_write_str(kSourceFail);
+        }
+        return 1;
+    }
+
+    g_shell_script_depth++;
+    for (;;) {
+        int32_t rc = user_read((uint32_t)fd, chunk, (uint32_t)sizeof(chunk));
+        if (rc <= 0) {
+            break;
+        }
+
+        for (uint32_t i = 0U; i < (uint32_t)rc; i++) {
+            char ch = chunk[i];
+            int line_status = 0;
+
+            if (ch == '\r') {
+                continue;
+            }
+            if (ch == '\n') {
+                if (line_overflow != 0U) {
+                    if (interactive != 0) {
+                        shell_write_str(kSourceParseFail);
+                    }
+                    last_status = 1;
+                    keep_running = 0;
+                    line_len = 0U;
+                    line_overflow = 0U;
+                    break;
+                }
+                line[line_len] = '\0';
+                line_len = 0U;
+                if (shell_trim_line(line, &line_len) < 0) {
+                    last_status = 1;
+                    keep_running = 0;
+                    break;
+                }
+                if (line_len == 0U || line[0] == '#') {
+                    continue;
+                }
+                keep_running = shell_dispatch_line(line, &line_status);
+                last_status = line_status;
+                if (!keep_running) {
+                    break;
+                }
+                continue;
+            }
+            if (line_overflow != 0U) {
+                continue;
+            }
+            if (line_len + 1U < sizeof(line)) {
+                line[line_len++] = ch;
+            } else {
+                line_overflow = 1U;
+            }
+        }
+        if (!keep_running) {
+            break;
+        }
+    }
+
+    if (keep_running && line_len != 0U) {
+        int line_status = 0;
+
+        if (line_overflow != 0U) {
+            if (interactive != 0) {
+                shell_write_str(kSourceParseFail);
+            }
+            last_status = 1;
+            keep_running = 0;
+        } else {
+            line[line_len] = '\0';
+            line_len = 0U;
+            if (shell_trim_line(line, &line_len) == 0 &&
+                line_len != 0U &&
+                line[0] != '#') {
+                keep_running = shell_dispatch_line(line, &line_status);
+                last_status = line_status;
+            }
+        }
+    }
+
+    g_shell_script_depth--;
+    (void)user_close((uint32_t)fd);
+    if (out_status) {
+        *out_status = last_status;
+    }
+    return keep_running;
+}
+
+static int shell_run_source(const char *args, uint32_t args_len, int interactive) {
+    char path[SHELL_PATH_MAX];
+    int status = 1;
+
+    if (!args) {
+        if (interactive != 0) {
+            shell_write_str(kSourceUsage);
+        }
+        return 1;
+    }
+    args_len = user_strlen(args);
+    if (args_len == 0U) {
+        const char *latest = 0;
+        uint32_t latest_len = 0U;
+        const char *fallbacks[2] = { g_shell_line, 0 };
+        uint32_t fallback_lens[2] = { user_strlen(g_shell_line), 0U };
+
+        if (shell_history_get(0U, &latest, &latest_len) == 0 && latest && latest_len != 0U) {
+            fallbacks[1] = latest;
+            fallback_lens[1] = latest_len;
+        }
+        for (uint32_t f = 0U; f < 2U; f++) {
+            const char *full = fallbacks[f];
+            uint32_t full_len = fallback_lens[f];
+            uint32_t start;
+            uint32_t cmd_end;
+            uint32_t end;
+
+            if (!full || full_len == 0U) {
+                continue;
+            }
+            start = shell_skip_spaces(full, 0U);
+            cmd_end = shell_token_end(full, start);
+            if (cmd_end <= start ||
+                (!user_str_eq_n(full + start, "source", cmd_end - start) &&
+                 !user_str_eq_n(full + start, "sh", cmd_end - start))) {
+                continue;
+            }
+            start = shell_skip_spaces(full, cmd_end);
+            if (start >= full_len || full[start] == '\0') {
+                continue;
+            }
+            end = full_len;
+            while (end > start && user_is_space(full[end - 1U])) {
+                end--;
+            }
+            if (end <= start || end - start + 1U > sizeof(path)) {
+                continue;
+            }
+            user_memcpy(path, full + start, end - start);
+            path[end - start] = '\0';
+            return shell_run_script_path(path, user_strlen(path), interactive, &status);
+        }
+    }
+    if (shell_parse_single_arg_token(args, args_len, path, sizeof(path)) < 0) {
+        uint32_t start;
+        uint32_t end;
+        uint32_t len;
+
+        start = shell_skip_spaces(args, 0U);
+        if (start >= args_len || args[start] == '\0') {
+            if (interactive != 0) {
+                shell_write_str(kSourceUsage);
+            }
+            return 1;
+        }
+        end = args_len;
+        while (end > start && user_is_space(args[end - 1U])) {
+            end--;
+        }
+        len = end - start;
+        if (len == 0U || len + 1U > sizeof(path)) {
+            if (interactive != 0) {
+                shell_write_str(kSourceUsage);
+            }
+            return 1;
+        }
+        user_memcpy(path, args + start, len);
+        path[len] = '\0';
+    }
+    return shell_run_script_path(path, user_strlen(path), interactive, &status);
+}
+
+static int shell_run_export(const char *args, uint32_t args_len) {
+    char tok[SHELL_LINE_MAX];
+    uint32_t idx = 0U;
+    uint32_t tok_len = 0U;
+    enum shell_token_kind kind;
+    uint32_t exported = 0U;
+
+    (void)args_len;
+    if (!args) {
+        args = "";
+    }
+    kind = shell_next_token(args, &idx, tok, sizeof(tok), &tok_len);
+    if (kind == SHELL_TOK_NONE) {
+        for (uint32_t i = 0U; i < SHELL_VAR_MAX; i++) {
+            if (g_shell_vars[i].used == 0U || g_shell_vars[i].exported == 0U) {
+                continue;
+            }
+            shell_write_str(kExportPrefix);
+            shell_write_str(g_shell_vars[i].name);
+            shell_write_char('=');
+            shell_write_str(g_shell_vars[i].value);
+            shell_write_str(kNewline);
+            exported++;
+        }
+        if (exported == 0U) {
+            shell_write_str(kExportEmpty);
+        }
+        return 1;
+    }
+    while (kind == SHELL_TOK_WORD) {
+        uint32_t eq = 0U;
+
+        if (shell_parse_assignment_token(tok, tok_len, &eq) == 0) {
+            if (shell_apply_assignment_token(tok, tok_len, 1U) < 0) {
+                shell_write_str(kExportUsage);
+                return 1;
+            }
+        } else {
+            if (!shell_is_name_start_char(tok[0])) {
+                shell_write_str(kExportUsage);
+                return 1;
+            }
+            for (uint32_t i = 1U; i < tok_len; i++) {
+                if (!shell_is_name_char(tok[i])) {
+                    shell_write_str(kExportUsage);
+                    return 1;
+                }
+            }
+            if (shell_var_mark_exported(tok, tok_len) < 0) {
+                shell_write_str(kExportUsage);
+                return 1;
+            }
+        }
+        kind = shell_next_token(args, &idx, tok, sizeof(tok), &tok_len);
+    }
+    if (kind != SHELL_TOK_NONE) {
+        shell_write_str(kExportUsage);
+    }
+    return 1;
+}
+
 static int shell_bg_register_job(const int32_t pids[SHELL_PIPELINE_MAX],
                                  uint32_t count,
                                  const char *cmd_preview) {
@@ -2697,6 +3306,9 @@ cleanup:
             last_status = status;
         }
     }
+    if (launch_failed) {
+        return -1;
+    }
     return (int)last_status;
 }
 
@@ -2781,7 +3393,7 @@ static int shell_history_handle_command(const char *args, uint32_t args_len) {
 
         shell_history_push(run_buf, run_len);
         g_shell_history_run_depth++;
-        rc = shell_dispatch_line(run_buf);
+        rc = shell_dispatch_line(run_buf, &g_shell_last_status);
         g_shell_history_run_depth--;
         return rc;
     }
@@ -3070,6 +3682,15 @@ static int shell_dispatch_builtin(struct shell_stage *stage) {
     if (user_str_eq_n(stage->cmd, "set", stage->cmd_len)) {
         return shell_run_set(stage->cmdline, stage->cmdline_len);
     }
+    if (user_str_eq_n(stage->cmd, "sh", stage->cmd_len)) {
+        return shell_run_source(stage->cmdline, stage->cmdline_len, 1);
+    }
+    if (user_str_eq_n(stage->cmd, "source", stage->cmd_len)) {
+        return shell_run_source(stage->cmdline, stage->cmdline_len, 1);
+    }
+    if (user_str_eq_n(stage->cmd, "export", stage->cmd_len)) {
+        return shell_run_export(stage->cmdline, stage->cmdline_len);
+    }
     if (user_str_eq_n(stage->cmd, "wait", stage->cmd_len)) {
         shell_wait_background_jobs();
         return 1;
@@ -3097,14 +3718,162 @@ static int shell_dispatch_builtin(struct shell_stage *stage) {
     return 1;
 }
 
-static int shell_dispatch_line(char *line) {
+static int shell_chain_next_segment(char *line,
+                                    uint32_t *cursor_io,
+                                    char **out_segment,
+                                    enum shell_chain_op *out_next_op) {
+    uint32_t cursor;
+    uint32_t start;
+    uint32_t i;
+    uint32_t delim_len = 0U;
+    enum shell_chain_op next_op = SHELL_CHAIN_NONE;
+    int in_single = 0;
+    int in_double = 0;
+
+    if (!line || !cursor_io || !out_segment || !out_next_op) {
+        return -1;
+    }
+    cursor = *cursor_io;
+    start = shell_skip_spaces(line, cursor);
+    if (line[start] == '\0') {
+        *cursor_io = start;
+        return 0;
+    }
+
+    i = start;
+    while (line[i] != '\0') {
+        char ch = line[i];
+
+        if (!in_single && ch == '\\') {
+            if (line[i + 1U] == '\0') {
+                break;
+            }
+            i += 2U;
+            continue;
+        }
+        if (!in_double && ch == '\'') {
+            in_single = !in_single;
+            i++;
+            continue;
+        }
+        if (!in_single && ch == '"') {
+            in_double = !in_double;
+            i++;
+            continue;
+        }
+        if (!in_single && !in_double) {
+            if (ch == ';') {
+                delim_len = 1U;
+                next_op = SHELL_CHAIN_SEQ;
+                break;
+            }
+            if (ch == '&' && line[i + 1U] == '&') {
+                delim_len = 2U;
+                next_op = SHELL_CHAIN_AND;
+                break;
+            }
+            if (ch == '|' && line[i + 1U] == '|') {
+                delim_len = 2U;
+                next_op = SHELL_CHAIN_OR;
+                break;
+            }
+        }
+        i++;
+    }
+
+    {
+        uint32_t end = i;
+        while (end > start && user_is_space(line[end - 1U])) {
+            end--;
+        }
+        if (end <= start) {
+            return -1;
+        }
+        line[end] = '\0';
+        *out_segment = line + start;
+    }
+
+    if (delim_len != 0U) {
+        *cursor_io = i + delim_len;
+        *out_next_op = next_op;
+    } else {
+        *cursor_io = i;
+        *out_next_op = SHELL_CHAIN_NONE;
+    }
+    return 1;
+}
+
+static int shell_try_assignment_only_line(const char *line, int *out_handled, int *out_status) {
+    char tok[SHELL_LINE_MAX];
+    uint32_t idx = 0U;
+    uint32_t tok_len = 0U;
+    enum shell_token_kind kind;
+    uint32_t handled = 0U;
+
+    if (!line || !out_handled || !out_status) {
+        return -1;
+    }
+    *out_handled = 0;
+    *out_status = 0;
+
+    kind = shell_next_token(line, &idx, tok, sizeof(tok), &tok_len);
+    while (kind == SHELL_TOK_WORD) {
+        if (shell_apply_assignment_token(tok, tok_len, 0U) < 0) {
+            *out_handled = 0;
+            *out_status = 0;
+            return 0;
+        }
+        handled = 1U;
+        kind = shell_next_token(line, &idx, tok, sizeof(tok), &tok_len);
+    }
+    if (kind != SHELL_TOK_NONE) {
+        *out_handled = 0;
+        *out_status = 0;
+        return 0;
+    }
+    if (handled != 0U) {
+        *out_handled = 1;
+        *out_status = 0;
+    }
+    return 0;
+}
+
+static int shell_dispatch_single_line(char *line, int *out_status) {
+    uint32_t raw_start = 0U;
+    uint32_t raw_cmd_end = 0U;
     uint32_t stage_count = 0U;
     uint32_t background = 0U;
     int has_meta = 0;
     int rc;
+    int exec_rc = 0;
 
     if (!line) {
+        if (out_status) {
+            *out_status = 1;
+        }
         return 1;
+    }
+    raw_start = shell_skip_spaces(line, 0U);
+    raw_cmd_end = shell_token_end(line, raw_start);
+    if (raw_cmd_end > raw_start &&
+        (user_str_eq_n(line + raw_start, "source", raw_cmd_end - raw_start) ||
+         user_str_eq_n(line + raw_start, "sh", raw_cmd_end - raw_start))) {
+        const char *builtin_tag = user_str_eq_n(line + raw_start,
+                                                "source",
+                                                raw_cmd_end - raw_start)
+                                      ? "source"
+                                      : "sh";
+        uint32_t arg_start = shell_skip_spaces(line, raw_cmd_end);
+        uint32_t arg_end = user_strlen(line);
+
+        while (arg_end > arg_start && user_is_space(line[arg_end - 1U])) {
+            arg_end--;
+        }
+        shell_timeline_record("builtin", builtin_tag);
+        if (out_status) {
+            *out_status = 0;
+        }
+        return shell_run_source(line + arg_start, arg_end - arg_start, 1);
     }
 
     rc = shell_parse_stages(line,
@@ -3116,35 +3885,181 @@ static int shell_dispatch_line(char *line) {
     if (rc < 0) {
         shell_write_str(kParseFail);
         shell_timeline_record("parse-fail", line);
+        if (out_status) {
+            *out_status = 1;
+        }
         return 1;
     }
     if (stage_count == 0U) {
+        if (out_status) {
+            *out_status = 0;
+        }
         return 1;
     }
 
     if (stage_count == 1U && !has_meta &&
         shell_is_builtin_name(g_shell_stages[0].cmd, g_shell_stages[0].cmd_len)) {
         shell_timeline_record("builtin", g_shell_stages[0].cmd);
+        if (out_status) {
+            *out_status = 0;
+        }
         return shell_dispatch_builtin(&g_shell_stages[0]);
     }
     for (uint32_t i = 0U; i < stage_count; i++) {
         if (shell_is_builtin_name(g_shell_stages[i].cmd, g_shell_stages[i].cmd_len)) {
             shell_write_str(kBuiltinPipeRedirect);
             shell_timeline_record("builtin-meta", g_shell_stages[i].cmd);
+            if (out_status) {
+                *out_status = 1;
+            }
             return 1;
         }
     }
 
     shell_timeline_record(background != 0U ? "run-bg" : "run-fg", line);
-    (void)shell_execute_pipeline(g_shell_stages, stage_count, background, line);
+    exec_rc = shell_execute_pipeline(g_shell_stages, stage_count, background, line);
+    if (out_status) {
+        *out_status = exec_rc == 0 ? 0 : 1;
+    }
     return 1;
 }
 
+static int shell_dispatch_line(char *line, int *out_status) {
+    uint32_t cursor = 0U;
+    enum shell_chain_op gate = SHELL_CHAIN_SEQ;
+    int need_segment = 0;
+    int last_status = 0;
+
+    if (!line) {
+        if (out_status) {
+            *out_status = 1;
+        }
+        return 1;
+    }
+
+    for (;;) {
+        char *segment = 0;
+        enum shell_chain_op next_op = SHELL_CHAIN_NONE;
+        int seg_rc;
+
+        seg_rc = shell_chain_next_segment(line, &cursor, &segment, &next_op);
+        if (seg_rc < 0) {
+            shell_write_str(kParseFail);
+            shell_timeline_record("parse-fail", line);
+            if (out_status) {
+                *out_status = 1;
+            }
+            return 1;
+        }
+        if (seg_rc == 0) {
+            if (need_segment != 0) {
+                shell_write_str(kParseFail);
+                shell_timeline_record("parse-fail", line);
+                if (out_status) {
+                    *out_status = 1;
+                }
+            } else if (out_status) {
+                *out_status = last_status;
+            }
+            return 1;
+        }
+
+        need_segment = (next_op != SHELL_CHAIN_NONE);
+        if ((gate == SHELL_CHAIN_AND && last_status != 0) ||
+            (gate == SHELL_CHAIN_OR && last_status == 0)) {
+            gate = next_op;
+            if (next_op == SHELL_CHAIN_NONE && out_status) {
+                *out_status = last_status;
+            }
+            continue;
+        }
+
+        {
+            char expanded[SHELL_LINE_MAX];
+            int handled_assign = 0;
+
+            if (shell_expand_vars(segment, expanded, sizeof(expanded)) < 0) {
+                shell_write_str(kParseFail);
+                shell_timeline_record("expand-fail", segment);
+                if (out_status) {
+                    *out_status = 1;
+                }
+                return 1;
+            }
+            (void)shell_try_assignment_only_line(expanded, &handled_assign, &last_status);
+            if (handled_assign == 0) {
+                int keep_running = shell_dispatch_single_line(expanded, &last_status);
+                if (!keep_running) {
+                    if (out_status) {
+                        *out_status = last_status;
+                    }
+                    return 0;
+                }
+            }
+        }
+        gate = next_op;
+        if (next_op == SHELL_CHAIN_NONE) {
+            if (out_status) {
+                *out_status = last_status;
+            }
+            return 1;
+        }
+    }
+}
+
+static int shell_try_run_boot_rc_script(void) {
+    static const char kRcPath[] = "/persist/rc.sh";
+    int32_t fd;
+    int status = 0;
+    int keep_running = 1;
+
+    fd = user_open(kRcPath, (uint32_t)(sizeof(kRcPath) - 1U), SYSCALL_OPEN_FLAG_READ);
+    if (fd < 0) {
+        return 1;
+    }
+    (void)user_close((uint32_t)fd);
+
+    shell_write_str(kRcRun);
+    shell_timeline_record("rc", kRcPath);
+    keep_running = shell_run_script_path(kRcPath, (uint32_t)(sizeof(kRcPath) - 1U), 0, &status);
+    g_shell_last_status = status;
+    return keep_running;
+}
+
 void _start(void) {
+    char boot_cmdline[SHELL_LINE_MAX];
+    int32_t boot_cmdline_len;
+
     g_shell_ansi_supported = 0U;
+    g_shell_last_status = 0;
     (void)shell_sync_cwd();
     shell_history_load_persisted();
+
+    boot_cmdline_len = user_getcmdline(boot_cmdline, sizeof(boot_cmdline));
+    if (boot_cmdline_len > 0) {
+        char tok[SHELL_LINE_MAX];
+        uint32_t idx = 0U;
+        uint32_t tok_len = 0U;
+        enum shell_token_kind kind;
+        int status = 0;
+
+        if ((uint32_t)boot_cmdline_len >= sizeof(boot_cmdline)) {
+            boot_cmdline_len = (int32_t)sizeof(boot_cmdline) - 1;
+        }
+        boot_cmdline[(uint32_t)boot_cmdline_len] = '\0';
+        kind = shell_next_token(boot_cmdline, &idx, tok, sizeof(tok), &tok_len);
+        if (kind == SHELL_TOK_WORD && tok_len != 0U) {
+            (void)shell_run_script_path(tok, tok_len, 0, &status);
+            shell_drain_background_jobs();
+            user_exit(status == 0 ? 0 : 1);
+        }
+    }
+
     shell_write_str(kBanner);
+    if (!shell_try_run_boot_rc_script()) {
+        shell_drain_background_jobs();
+        user_exit(g_shell_last_status == 0 ? 0 : 1);
+    }
     for (;;) {
         int32_t rc;
         uint32_t cmd_start = 0U;
@@ -3172,9 +4087,9 @@ void _start(void) {
             shell_history_push(g_shell_line, user_strlen(g_shell_line));
             cmd_start = shell_now_ticks_lo();
         }
-        if (!shell_dispatch_line(g_shell_line)) {
+        if (!shell_dispatch_line(g_shell_line, &g_shell_last_status)) {
             shell_drain_background_jobs();
-            user_exit(0);
+            user_exit(g_shell_last_status == 0 ? 0 : 1);
         }
         if (g_shell_line[0] != '\0') {
             cmd_end = shell_now_ticks_lo();

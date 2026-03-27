@@ -45,6 +45,7 @@ STORAGE_INTEGRITY_DISK = $(BUILD)/storage-integrity.img
 STORAGE_PERSIST_DISK = $(BUILD)/storage-persist.img
 STORAGE_REPLAY_DISK = $(BUILD)/storage-replay.img
 SHELL_HISTORY_PERSIST_DISK = $(BUILD)/storage-shell-history-persist.img
+SHELL_SCRIPT_CORE_DISK = $(BUILD)/storage-shell-script-core.img
 USERLAND_BUILD = $(BUILD)/userland
 INITRAMFS_STAGING = $(BUILD)/initramfs_root
 INITRAMFS_TAR = $(BUILD)/initramfs_demo.tar
@@ -99,7 +100,7 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/forktest.elf \
 	$(USERLAND_BUILD)/sleep2.elf
 
-.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-fb-dump qemu-smoke-gui-visual-baseline qemu-smoke-gui-visual-baseline-refresh qemu-smoke-storage-integrity qemu-smoke-storage-persist qemu-smoke-storage-replay qemu-smoke-shell-history-persist qemu-smoke-fork-cow qemu-smoke-fork-cow-stress qemu-smoke-fork-cow-pressure qemu-smoke-shell-bg-replay check check-pr check-release check-nightly
+.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-shell-script-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-fb-dump qemu-smoke-gui-visual-baseline qemu-smoke-gui-visual-baseline-refresh qemu-smoke-storage-integrity qemu-smoke-storage-persist qemu-smoke-storage-replay qemu-smoke-shell-history-persist qemu-smoke-fork-cow qemu-smoke-fork-cow-stress qemu-smoke-fork-cow-pressure qemu-smoke-shell-bg-replay check check-pr check-release check-nightly
 
 all: $(ISO)
 
@@ -1018,6 +1019,84 @@ qemu-smoke-shell-core: $(ISO)
 	fi
 	@echo "[qemu-smoke-shell-core] PASS (interactive shell)"
 
+qemu-smoke-shell-script-core: $(ISO) $(SHELL_SCRIPT_CORE_DISK)
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/qemu-smoke-shell-script-core.boot1.log $(BUILD)/qemu-smoke-shell-script-core.boot2.log
+	@echo "[qemu-smoke-shell-script-core] Boot #1 creates /persist scripts, Boot #2 validates scripting features..."
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-shell-script-core.boot1,$(BUILD)/qemu-smoke-shell-script-core.boot1.log,$(SHELL_SCRIPT_CORE_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+printf "echo 'A=rcv; echo rc-auto; echo rc-\\$$A; echo rc-left && echo rc-right' > rc.sh\n"; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-script-core.boot1,$(BUILD)/qemu-smoke-shell-script-core.boot1.log)
+	$(call RUN_SCRIPTED_SHELL_SMOKE_WITH_DISK,qemu-smoke-shell-script-core.boot2,$(BUILD)/qemu-smoke-shell-script-core.boot2.log,$(SHELL_SCRIPT_CORE_DISK),printf 'cd /persist\n'; \
+sleep 0.25; \
+printf 'A=hello\n'; \
+sleep 0.25; \
+printf 'echo $$A\n'; \
+sleep 0.25; \
+printf 'echo and-left && echo and-right\n'; \
+sleep 0.25; \
+printf 'missingcmd && echo and-should-not-run\n'; \
+sleep 0.25; \
+printf 'missingcmd || echo or-fallback\n'; \
+sleep 0.25; \
+printf 'echo seq-one; echo seq-two\n'; \
+sleep 0.25; \
+printf 'export B=world\n'; \
+sleep 0.25; \
+printf 'echo $$B\n'; \
+sleep 0.25; \
+printf 'exit\n';)
+	$(call ASSERT_SHELL_BOOT_READY,qemu-smoke-shell-script-core.boot2,$(BUILD)/qemu-smoke-shell-script-core.boot2.log)
+	@if ! grep -Fq "rc: running /persist/rc.sh" $(BUILD)/qemu-smoke-shell-script-core.boot2.log; then \
+		echo "[qemu-smoke-shell-script-core] Missing rc boot hook marker"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "rc-auto"; then \
+		echo "[qemu-smoke-shell-script-core] Missing rc script output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "and-right"; then \
+		echo "[qemu-smoke-shell-script-core] Missing && chain success output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "and-should-not-run"; then \
+		echo "[qemu-smoke-shell-script-core] && chain unexpectedly executed rhs after failure"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "or-fallback"; then \
+		echo "[qemu-smoke-shell-script-core] Missing || fallback output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "seq-one" || \
+		! tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "seq-two"; then \
+		echo "[qemu-smoke-shell-script-core] Missing ';' chain output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "hello"; then \
+		echo "[qemu-smoke-shell-script-core] Missing assignment expansion output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-script-core.boot2.log | grep -Fxq "world"; then \
+		echo "[qemu-smoke-shell-script-core] Missing export variable expansion output"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@if ! grep -Fq "sh: exit" $(BUILD)/qemu-smoke-shell-script-core.boot2.log; then \
+		echo "[qemu-smoke-shell-script-core] Missing shell exit marker"; \
+		tail -n 260 $(BUILD)/qemu-smoke-shell-script-core.boot2.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-shell-script-core] PASS"
+
 
 qemu-smoke-reliability: $(ISO)
 	@mkdir -p $(BUILD)
@@ -1123,7 +1202,7 @@ qemu-smoke-reliability: $(ISO)
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
 	fi
-	@if ! grep -Fq "diag: spawn missing path ok" $(BUILD)/qemu-smoke-reliability.log; then \
+	@if ! grep -Eq "diag: spawn missing path[^[:cntrl:]]*ok" $(BUILD)/qemu-smoke-reliability.log; then \
 		echo "[qemu-smoke-reliability] Missing diag spawn missing-path check"; \
 		tail -n 220 $(BUILD)/qemu-smoke-reliability.log; \
 		exit 1; \
@@ -1803,6 +1882,7 @@ check: check-pr
 
 check-release: check-pr
 	@$(MAKE) qemu-smoke-lifecycle
+	@$(MAKE) qemu-smoke-shell-script-core
 
 check-nightly:
 	@rc=0; \
