@@ -15,7 +15,7 @@ Small 32-bit x86 kernel that boots via GRUB Multiboot2. It is mostly C, with a l
   - `make check-release` — `make check` plus lifecycle smoke
   - `make qemu-smoke-userfault` — verifies `/bin/fault.elf` triggers user page-fault recovery and returns to the shell
   - `make qemu-smoke-lifecycle` — verifies wait/spawn/reap and FD open/read/close flow
-  - `make qemu-smoke-shell-core` — verifies core shell behavior, command dispatch, `ps`, `ls`, `readln`, `./tool`, multicall dispatch, external `echo`/`cat`, failure handling, and `waitpid`
+  - `make qemu-smoke-shell-core` — verifies core shell behavior, command dispatch, `ps`, `ls`, `readln`, `./tool`, multicall dispatch, external `echo`/`cat`, `bootshow` showcase mode, failure handling, and `waitpid`
   - `make qemu-smoke-reliability` — verifies `uptime`, `sleep`, pipes, redirection, and `diag`
 - **Run**: `make run` or `qemu-system-i386 -cdrom skezos.iso`
 - **Includes**: serial console, keyboard, VGA output, interrupts/IDT, paging, physical allocator, `kmalloc`, panic logging, and page-fault handling
@@ -41,7 +41,7 @@ It is intentionally minimal. The shell is still bootstrap-grade: whitespace pars
 
 Display output now goes through a thin abstraction layer. The kernel can map a higher-half framebuffer window safely, and the default boot path uses a framebuffer text shell when a direct-RGB surface is available, with VGA fallback otherwise. The framebuffer shell has a compact header, a framed content area, color-coded prompts and common line types, a scrolling gutter, a fixed prompt lane, and a footer HUD with a command timeline rail. The current font is still a bootstrap font, now rendered on a denser 5x7 grid with full printable-ASCII coverage verification at boot. The framebuffer profile also emits a deterministic GUI state hash line used by smoke tests.
 
-It also supports basic external-command pipelines and redirection: `|`, `<`, `>`, `>>`, `2>`, and `2>>`. It still has no quoting, `2>&1`, or background jobs.
+It also supports basic external-command pipelines and redirection: `|`, `<`, `>`, `>>`, `2>`, and `2>>`. The shell now has a `bootshow [on|off|run]` path for scripted boot demos that flips the HUD/theme, prints a quick status line, and replays a short timeline showcase. It still has no quoting, `2>&1`, or background jobs.
 
 Add a better shell, disk drivers, a filesystem, or whatever you want next.
 

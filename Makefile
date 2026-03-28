@@ -515,6 +515,14 @@ printf 'set theme plain\n'; \
 sleep 0.20; \
 printf 'replay 3\n'; \
 sleep 0.20; \
+printf 'bootshow on\n'; \
+sleep 0.20; \
+printf 'bootshow\n'; \
+sleep 0.20; \
+printf 'bootshow run\n'; \
+sleep 0.20; \
+printf 'bootshow off\n'; \
+sleep 0.20; \
 printf 'hud\n'; \
 sleep 0.20; \
 printf 'set hud on\n'; \
@@ -783,6 +791,21 @@ qemu-smoke-shell-core: $(ISO)
 	fi
 	@if ! grep -Fq "replay: seq=" $(BUILD)/qemu-smoke-shell-core.log; then \
 		echo "[qemu-smoke-shell-core] Missing replay builtin output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fq "bootshow: on"; then \
+		echo "[qemu-smoke-shell-core] Missing bootshow enable output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fq "bootshow: showcase"; then \
+		echo "[qemu-smoke-shell-core] Missing bootshow showcase output"; \
+		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
+		exit 1; \
+	fi
+	@if ! tr -d '\r' < $(BUILD)/qemu-smoke-shell-core.log | grep -Fq "bootshow: off"; then \
+		echo "[qemu-smoke-shell-core] Missing bootshow disable output"; \
 		tail -n 240 $(BUILD)/qemu-smoke-shell-core.log; \
 		exit 1; \
 	fi
