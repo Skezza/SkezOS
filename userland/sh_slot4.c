@@ -91,6 +91,7 @@ static uint32_t g_shell_timeline_count;
 static uint32_t g_shell_timeline_next_seq = 1U;
 static uint32_t g_shell_theme_ansi;
 static uint32_t g_shell_hud_enabled;
+static uint32_t g_shell_bootshow_enabled;
 static uint32_t g_shell_last_cmd_ticks;
 static uint32_t g_shell_last_cmd_health;
 static uint32_t g_shell_ansi_supported;
@@ -99,7 +100,7 @@ static int32_t g_shell_last_status;
 
 static const char kBanner[] = "SkezOS shell ready\nType 'help' for commands.\n";
 static const char kHelp[] =
-    "builtins: help history [clear|run N] ps ls pwd cd jobs fg [job_id] wait timeline [N] replay [N] hud [on|off] set theme|hud ... sh source export exit\n"
+    "builtins: help history [clear|run N] ps ls pwd cd jobs fg [job_id] wait timeline [N] replay [N] hud [on|off] bootshow [on|off|run] set theme|hud ... sh source export exit\n"
     "run: <name> -> /bin/<name>.elf, ./tool uses cwd, pipeline/redir supported, suffix '&' for background\n"
     "ops: ';' '&&' '||' chaining supported, NAME=value and $NAME expansion supported\n"
     "scripts: source <path>, sh <path> (script mode), auto-runs /persist/rc.sh at boot when present\n"
@@ -159,6 +160,9 @@ static const char kHudLastPrefix[] = " last=";
 static const char kHudLatencyPrefix[] = " latency=";
 static const char kHudStatePrefix[] = " state=";
 static const char kHudTicksSuffix[] = "t";
+static const char kBootShowUsage[] = "bootshow: usage: bootshow [on|off|run]\n";
+static const char kBootShowPrefix[] = "bootshow: ";
+static const char kBootShowShowcase[] = "bootshow: showcase\n";
 static const char kSetUsage[] = "set: usage: set theme [plain|ansi] | set hud [on|off]\n";
 static const char kSetThemePrefix[] = "set: theme=";
 static const char kSetThemePlain[] = "plain\n";
@@ -197,6 +201,7 @@ static const char *kShellCompletionBuiltins[] = {
     "timeline",
     "replay",
     "hud",
+    "bootshow",
     "set",
     "sh",
     "source",
@@ -223,6 +228,7 @@ static int shell_run_fg(const char *args, uint32_t args_len);
 static int shell_run_timeline(const char *args, uint32_t args_len);
 static int shell_run_replay(const char *args, uint32_t args_len);
 static int shell_run_hud(const char *args, uint32_t args_len);
+static int shell_run_bootshow(const char *args, uint32_t args_len);
 static int shell_run_set(const char *args, uint32_t args_len);
 static int shell_run_source(const char *args, uint32_t args_len, int interactive);
 static int shell_run_export(const char *args, uint32_t args_len);
@@ -2021,6 +2027,7 @@ static int shell_is_builtin_name(const char *cmd, uint32_t cmd_len) {
            user_str_eq_n(cmd, "timeline", cmd_len) ||
            user_str_eq_n(cmd, "replay", cmd_len) ||
            user_str_eq_n(cmd, "hud", cmd_len) ||
+           user_str_eq_n(cmd, "bootshow", cmd_len) ||
            user_str_eq_n(cmd, "set", cmd_len) ||
            user_str_eq_n(cmd, "sh", cmd_len) ||
            user_str_eq_n(cmd, "source", cmd_len) ||
@@ -2619,6 +2626,60 @@ static int shell_run_hud(const char *args, uint32_t args_len) {
         shell_timeline_record("set-hud", g_shell_hud_enabled != 0U ? "on" : "off");
     }
     shell_hud_print_line();
+    return 1;
+}
+
+static int shell_run_bootshow(const char *args, uint32_t args_len) {
+    uint32_t arg_start;
+    uint32_t arg_end;
+
+    if (!args) {
+        args = "";
+        args_len = 0U;
+    }
+
+    arg_start = shell_skip_spaces(args, 0U);
+    if (arg_start >= args_len || args[arg_start] == '\0') {
+        shell_write_str(kBootShowPrefix);
+        shell_write_str(g_shell_bootshow_enabled != 0U ? kSetHudOn : kSetHudOff);
+        shell_hud_print_line();
+        return 1;
+    }
+
+    arg_end = shell_token_end(args, arg_start);
+    if (shell_skip_spaces(args, arg_end) != args_len) {
+        shell_write_str(kBootShowUsage);
+        return 1;
+    }
+
+    if (user_str_eq_n(args + arg_start, "on", arg_end - arg_start)) {
+        g_shell_bootshow_enabled = 1U;
+        g_shell_hud_enabled = 1U;
+        g_shell_theme_ansi = 1U;
+        shell_write_str(kBootShowPrefix);
+        shell_write_str(kSetHudOn);
+        if (g_shell_ansi_supported == 0U) {
+            shell_write_str(kSetThemeAnsiFallback);
+        }
+        shell_timeline_record("bootshow-on", "");
+        return 1;
+    }
+    if (user_str_eq_n(args + arg_start, "off", arg_end - arg_start)) {
+        g_shell_bootshow_enabled = 0U;
+        shell_write_str(kBootShowPrefix);
+        shell_write_str(kSetHudOff);
+        shell_timeline_record("bootshow-off", "");
+        return 1;
+    }
+    if (user_str_eq_n(args + arg_start, "run", arg_end - arg_start)) {
+        shell_write_str(kBootShowShowcase);
+        shell_timeline_record("bootshow-run", "6");
+        (void)shell_run_timeline("6", 1U);
+        (void)shell_run_replay("6", 1U);
+        return 1;
+    }
+
+    shell_write_str(kBootShowUsage);
     return 1;
 }
 
@@ -3678,6 +3739,9 @@ static int shell_dispatch_builtin(struct shell_stage *stage) {
     }
     if (user_str_eq_n(stage->cmd, "hud", stage->cmd_len)) {
         return shell_run_hud(stage->cmdline, stage->cmdline_len);
+    }
+    if (user_str_eq_n(stage->cmd, "bootshow", stage->cmd_len)) {
+        return shell_run_bootshow(stage->cmdline, stage->cmdline_len);
     }
     if (user_str_eq_n(stage->cmd, "set", stage->cmd_len)) {
         return shell_run_set(stage->cmdline, stage->cmdline_len);
