@@ -64,8 +64,9 @@ USERLAND_ASFLAGS = $(ASFLAGS) -I userland
 USERLAND_CFLAGS = $(CFLAGS) -I userland
 USERLAND_LDFLAGS = $(LDFLAGS) -nostdlib -N -e _start
 
-SRCS  = $(wildcard kernel/*.c)
+SRCS  = $(filter-out kernel/initramfs_demo_blob.c,$(wildcard kernel/*.c))
 OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SRCS))
+INITRAMFS_BLOB_OBJ = $(BUILD)/initramfs_demo_blob.o
 
 ASM_OBJS = $(BUILD)/idt_load.o $(BUILD)/sched_switch.o $(BUILD)/gdt_flush.o $(BUILD)/syscall_entry.o $(BUILD)/user_demo_blob.o
 
@@ -132,7 +133,7 @@ $(BUILD)/multiboot2_header.o: boot/multiboot2_header.S
 $(BUILD)/loader.o: boot/loader.S
 	$(AS) $(ASFLAGS) $< -o $@
 
-$(BUILD)/kernel.elf: $(BUILD)/multiboot2_header.o $(BUILD)/loader.o $(ASM_OBJS) $(OBJS)
+$(BUILD)/kernel.elf: $(BUILD)/multiboot2_header.o $(BUILD)/loader.o $(ASM_OBJS) $(OBJS) $(INITRAMFS_BLOB_OBJ)
 	$(LD) $(LDFLAGS) -T kernel/linker.ld -o $@ $^
 
 $(BUILD)/initramfs_demo_blob.o: kernel/initramfs_demo_blob.c
