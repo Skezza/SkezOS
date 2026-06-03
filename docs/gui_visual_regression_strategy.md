@@ -80,3 +80,12 @@ Add deterministic GUI-regression signals without requiring fragile screenshot co
 - Baseline gate now targets `fb-shell-v5`:
   - expected ROI hash: `0x1BD7880D`
   - `qemu-smoke-gui-visual-baseline-refresh` and `qemu-smoke-gui-visual-baseline` both use profile `fb-shell-v5`
+- Desktop-shell chrome follow-on is now versioned to `fb-shell-v6`:
+  - kernel now emits `display: gui_state_hash=0xAAA213A9 profile=fb-shell-v6`
+  - expected ROI hash: `0x17AA9EDD`
+  - the masked ROI now covers the desktop chrome set: top bar, launcher rail, window frame/titlebar, and operator-sidebar headers
+  - subsequent runtime-only navigation work (PS/2 arrow-key focus/view switching inside the framebuffer shell) intentionally preserves the same boot capture and ROI hash; the existing baseline remains the guardrail for default chrome layout
+  - runtime panel bodies are now gated separately:
+    - `fb-shell-v6-nav-task` hashes the task-view chrome plus upper body content after a scripted `down` arrow sequence and expects `0x77AFF05E`
+    - `fb-shell-v6-nav-focus` hashes focus/card-sensitive chrome after a scripted `down,right,down,left,up` sequence and expects `0xBFC5F4C6`
+  - the navigation smoke currently injects ANSI escape arrows over the serial smoke path and translates them back into keyboard extended scancodes inside the guest, because QMP `send-key` was accepted by QEMU but produced unchanged framebuffer captures under `-display none`

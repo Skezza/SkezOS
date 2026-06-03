@@ -2044,6 +2044,7 @@ static int shell_spawn_external(const char *cmd,
                                 uint32_t cmd_len,
                                 const char *cmdline,
                                 uint32_t cmdline_len,
+                                uint32_t spawn_flags,
                                 int32_t *out_pid) {
     int path_len;
 
@@ -2056,10 +2057,11 @@ static int shell_spawn_external(const char *cmd,
         return -1;
     }
 
-    *out_pid = user_spawn_ex(g_shell_path,
-                             (uint32_t)path_len,
-                             cmdline,
-                             cmdline_len);
+    *out_pid = user_spawn_ex_flags(g_shell_path,
+                                   (uint32_t)path_len,
+                                   cmdline,
+                                   cmdline_len,
+                                   spawn_flags);
     if (*out_pid < 0) {
         return -1;
     }
@@ -3215,6 +3217,7 @@ static int shell_execute_pipeline(struct shell_stage *stages,
         int err_fd = -1;
         int32_t saved_fd[3] = { -1, -1, -1 };
         int32_t pid = -1;
+        uint32_t spawn_flags = SYSCALL_SPAWN_FLAG_INHERIT_FDS;
 
         if (i > 0U) {
             in_fd = pipe_fds[i - 1U][0];
@@ -3296,10 +3299,15 @@ static int shell_execute_pipeline(struct shell_stage *stages,
             goto cleanup;
         }
 
+        if (background == 0U && i == 0U) {
+            spawn_flags |= SYSCALL_SPAWN_FLAG_FOREGROUND;
+        }
+
         if (shell_spawn_external(stages[i].cmd,
                                  stages[i].cmd_len,
                                  stages[i].spawn_cmdline_len != 0U ? stages[i].spawn_cmdline : 0,
                                  stages[i].spawn_cmdline_len,
+                                 spawn_flags,
                                  &pid) < 0) {
             shell_restore_stdio(saved_fd);
             if (in_fd >= 3) {

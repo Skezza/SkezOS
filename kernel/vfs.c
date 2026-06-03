@@ -32,6 +32,7 @@ static struct vfs_node *g_vfs_root;
 static vfs_console_input_owner_t g_vfs_console_input_owner;
 static int g_vfs_console_input_owner_pid;
 static int g_vfs_console_write_locked;
+static uint8_t g_vfs_console_serial_escape_state;
 
 struct vfs_root_ram_file {
     struct vfs_node node;
@@ -752,6 +753,7 @@ void vfs_init(void) {
     g_vfs_console_input_owner = VFS_CONSOLE_INPUT_OWNER_KERNEL;
     g_vfs_console_input_owner_pid = -1;
     g_vfs_console_write_locked = 0;
+    g_vfs_console_serial_escape_state = 0U;
     memset(g_vfs_root_entries, 0, sizeof(g_vfs_root_entries));
     memset(g_vfs_root_ramfiles, 0, sizeof(g_vfs_root_ramfiles));
     g_vfs_root_dir.count = 0;
@@ -929,6 +931,7 @@ int vfs_list_dir(const char *path,
 void vfs_console_set_input_owner_kernel(void) {
     g_vfs_console_input_owner = VFS_CONSOLE_INPUT_OWNER_KERNEL;
     g_vfs_console_input_owner_pid = -1;
+    g_vfs_console_serial_escape_state = 0U;
     KLOGI("vfs: console input owner=kernel");
 }
 
@@ -962,6 +965,56 @@ int vfs_console_input_owner_is_task(int pid) {
            g_vfs_console_input_owner_pid == pid;
 }
 
+static void vfs_console_feed_extended_scancode(uint8_t scancode) {
+    kbd_feed_scancode(0xE0U);
+    kbd_feed_scancode(scancode);
+    kbd_feed_scancode(0xE0U);
+    kbd_feed_scancode(scancode | 0x80U);
+}
+
+static int vfs_console_translate_serial_input(int serial_ch) {
+    if (serial_ch < 0) {
+        return serial_ch;
+    }
+
+    switch (g_vfs_console_serial_escape_state) {
+    case 0:
+        if (serial_ch == 0x1BU) {
+            g_vfs_console_serial_escape_state = 1U;
+            return -1;
+        }
+        return serial_ch;
+    case 1:
+        if (serial_ch == '[') {
+            g_vfs_console_serial_escape_state = 2U;
+            return -1;
+        }
+        g_vfs_console_serial_escape_state = 0U;
+        return serial_ch;
+    case 2:
+        g_vfs_console_serial_escape_state = 0U;
+        switch (serial_ch) {
+        case 'A':
+            vfs_console_feed_extended_scancode(0x48U);
+            return -1;
+        case 'B':
+            vfs_console_feed_extended_scancode(0x50U);
+            return -1;
+        case 'C':
+            vfs_console_feed_extended_scancode(0x4DU);
+            return -1;
+        case 'D':
+            vfs_console_feed_extended_scancode(0x4BU);
+            return -1;
+        default:
+            return serial_ch;
+        }
+    default:
+        g_vfs_console_serial_escape_state = 0U;
+        return serial_ch;
+    }
+}
+
 int vfs_console_poll_input_char(void) {
     int ch = kbd_getchar();
     int serial_ch;
@@ -970,6 +1023,10 @@ int vfs_console_poll_input_char(void) {
     }
 
     serial_ch = serial_readchar();
+    if (serial_ch < 0) {
+        return -1;
+    }
+    serial_ch = vfs_console_translate_serial_input(serial_ch);
     if (serial_ch < 0) {
         return -1;
     }

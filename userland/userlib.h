@@ -63,18 +63,30 @@ static inline int32_t user_spawn(const char *path, uint32_t path_len) {
     return user_syscall2(SYS_SPAWN, (uint32_t)(uintptr_t)path, path_len);
 }
 
-static inline int32_t user_spawn_ex(const char *path,
-                                    uint32_t path_len,
-                                    const char *cmdline,
-                                    uint32_t cmdline_len) {
+static inline int32_t user_spawn_ex_flags(const char *path,
+                                          uint32_t path_len,
+                                          const char *cmdline,
+                                          uint32_t cmdline_len,
+                                          uint32_t flags) {
     struct syscall_spawn_ex_req req;
 
     req.path_ptr = (uint32_t)(uintptr_t)path;
     req.path_len = path_len;
     req.cmdline_ptr = cmdline_len == 0U ? 0U : (uint32_t)(uintptr_t)cmdline;
     req.cmdline_len = cmdline_len;
-    req.flags = SYSCALL_SPAWN_FLAG_INHERIT_FDS;
+    req.flags = flags;
     return user_syscall1(SYS_SPAWN_EX, (uint32_t)(uintptr_t)&req);
+}
+
+static inline int32_t user_spawn_ex(const char *path,
+                                    uint32_t path_len,
+                                    const char *cmdline,
+                                    uint32_t cmdline_len) {
+    return user_spawn_ex_flags(path,
+                               path_len,
+                               cmdline,
+                               cmdline_len,
+                               SYSCALL_SPAWN_FLAG_INHERIT_FDS);
 }
 
 static inline int32_t user_open(const char *path, uint32_t path_len, uint32_t flags) {
@@ -146,6 +158,22 @@ static inline int32_t user_getcwd(char *buf, uint32_t buf_len) {
 
 static inline int32_t user_unlink(const char *path, uint32_t path_len) {
     return user_syscall2(SYS_UNLINK, (uint32_t)(uintptr_t)path, path_len);
+}
+
+static inline int32_t user_gui_create(const struct syscall_gui_create_req *req) {
+    return user_syscall1(SYS_GUI_CREATE, (uint32_t)(uintptr_t)req);
+}
+
+static inline int32_t user_gui_flush(const struct syscall_gui_flush_req *req) {
+    return user_syscall1(SYS_GUI_FLUSH, (uint32_t)(uintptr_t)req);
+}
+
+static inline int32_t user_gui_poll(int32_t window_id, struct syscall_gui_event *event) {
+    return user_syscall2(SYS_GUI_POLL, (uint32_t)window_id, (uint32_t)(uintptr_t)event);
+}
+
+static inline int32_t user_gui_destroy(int32_t window_id) {
+    return user_syscall1(SYS_GUI_DESTROY, (uint32_t)window_id);
 }
 
 static inline void user_yield(void) {

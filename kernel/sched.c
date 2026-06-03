@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "display.h"
 #include "kassert.h"
 #include "kerrno.h"
 #include "gdt.h"
@@ -194,6 +195,7 @@ static void sched_reap_task_locked(struct task *task) {
     sched_copy_task_name(name, task->name);
     stack_base = task->stack_base;
     aspace = task->address_space;
+    display_gui_notify_task_exit(task->pid);
     usermode_notify_task_reaped(task->pid);
     if (stack_base) {
         kfree(stack_base);
@@ -665,6 +667,14 @@ int sched_spawn_kernel_task(const char *name, sched_task_entry_t entry, void *ar
     return sched_spawn_task_internal(name, entry, arg, stack_size, -1, 0, 0);
 }
 
+int sched_spawn_kernel_task_ex(const char *name,
+                               sched_task_entry_t entry,
+                               void *arg,
+                               uint32_t stack_size,
+                               int *out_pid) {
+    return sched_spawn_task_internal(name, entry, arg, stack_size, -1, 0, out_pid);
+}
+
 int sched_spawn_user_child_task(const char *name,
                                 sched_task_entry_t entry,
                                 void *arg,
@@ -1086,6 +1096,10 @@ const char *sched_current_task_name(void) {
     return g_current_task->name;
 }
 
+int sched_is_started(void) {
+    return g_sched_started != 0;
+}
+
 int sched_current_task_owns_child_pid(int pid) {
     int owns = 0;
     struct task *child;
@@ -1433,6 +1447,7 @@ static void sched_task_exit(void) {
               self->ticks_run,
               self->switches,
               self->preemptions);
+        display_gui_notify_task_exit(self->pid);
 
         sched_orphan_or_reap_children_locked(self->pid);
 

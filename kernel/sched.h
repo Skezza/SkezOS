@@ -28,6 +28,11 @@ void sched_init(void);
  * Returns 0 on success or a negative -KERR_* code.
  */
 int sched_spawn_kernel_task(const char *name, sched_task_entry_t entry, void *arg, uint32_t stack_size);
+int sched_spawn_kernel_task_ex(const char *name,
+                               sched_task_entry_t entry,
+                               void *arg,
+                               uint32_t stack_size,
+                               int *out_pid);
 
 /* Mark the current scheduler task as a user-mode bootstrap task that
  * will drop to Ring 3 at USER_EIP/USER_ESP.
@@ -54,6 +59,7 @@ void sched_note_current_exit_code(int32_t exit_code);
 int sched_current_task_is_user(void);
 int sched_current_task_pid(void);
 const char *sched_current_task_name(void);
+int sched_is_started(void);
 int sched_current_task_owns_child_pid(int pid);
 int sched_collect_task_snapshot(struct syscall_task_snapshot_entry *entries,
                                 uint32_t cap,

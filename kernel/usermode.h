@@ -19,6 +19,7 @@ int usermode_spawn_elf_demo_task_b(void);
 
 /* Spawn the Phase 6 fixed-slot bootstrap shell task. */
 int usermode_spawn_shell_task(void);
+int usermode_spawn_gui_session_task(void);
 
 /* Minimal syscall-facing spawn hook for a path-only child launch.
  * Returns child pid (>0) on success or negative -KERR_* on failure.

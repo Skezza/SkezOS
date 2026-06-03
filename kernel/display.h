@@ -3,6 +3,17 @@
 
 #include <stdint.h>
 
+typedef enum {
+    DISPLAY_NAV_KEY_LEFT = 0,
+    DISPLAY_NAV_KEY_RIGHT = 1,
+    DISPLAY_NAV_KEY_UP = 2,
+    DISPLAY_NAV_KEY_DOWN = 3,
+} display_nav_key_t;
+
+struct syscall_gui_event;
+struct syscall_gui_flush_req;
+struct syscall_gui_create_req;
+
 /* Initialize the active kernel display surface.  The current backend is
  * VGA text mode; future framebuffer support should plug in here without
  * forcing callers to care about the backend choice.
@@ -26,5 +37,24 @@ void display_puts(const char *str);
  * if the active console output still targets VGA.
  */
 int display_framebuffer_ready(void);
+
+/* Route a GUI navigation key to the framebuffer shell chrome. Returns
+ * non-zero when the key was consumed by the GUI layer.
+ */
+int display_handle_navigation_key(display_nav_key_t key);
+
+/* Enable or query GUI compositor mode on the framebuffer backend. */
+void display_gui_enable(void);
+int display_gui_mode_active(void);
+
+/* GUI window manager hooks used by syscalls, input drivers, and task lifecycle. */
+int display_gui_create_window(const struct syscall_gui_create_req *req, int owner_pid, int *out_window_id);
+int display_gui_flush_window(const struct syscall_gui_flush_req *req, int owner_pid);
+int display_gui_poll_event(int window_id, int owner_pid, struct syscall_gui_event *out_event);
+int display_gui_destroy_window(int window_id, int owner_pid);
+void display_gui_notify_task_exit(int owner_pid);
+int display_gui_handle_key_event(uint32_t keycode, uint32_t ch, uint32_t modifiers, int pressed);
+void display_gui_handle_mouse_motion(int32_t dx, int32_t dy);
+void display_gui_handle_mouse_buttons(uint32_t buttons);
 
 #endif /* DISPLAY_H */
