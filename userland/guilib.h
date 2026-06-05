@@ -253,4 +253,21 @@ static inline int32_t gui_present_full(struct gui_window *window) {
     return gui_present_rect(window, 0U, 0U, window->width, window->height);
 }
 
+static inline int32_t gui_poll_events(struct gui_window *window,
+                                      struct syscall_gui_event *events,
+                                      uint32_t event_cap) {
+    if (!window) {
+        return -1;
+    }
+    return user_gui_poll_batch(window->id, events, event_cap);
+}
+
+static inline int32_t gui_query_window(struct gui_window *window,
+                                       struct syscall_gui_window_info *info) {
+    if (!window) {
+        return -1;
+    }
+    return user_gui_window_info(window->id, info);
+}
+
 #endif /* GUILIB_H */

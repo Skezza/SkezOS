@@ -117,6 +117,23 @@ static int rr_eq(const char *lhs, const char *rhs) {
     return 1;
 }
 
+static void rr_copy_str(char *dst, uint32_t cap, const char *src) {
+    uint32_t n = 0U;
+
+    if (!dst || cap == 0U) {
+        return;
+    }
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    while (src[n] != '\0' && n + 1U < cap) {
+        dst[n] = src[n];
+        n++;
+    }
+    dst[n] = '\0';
+}
+
 static uint32_t rr_parse_u32(const char *text) {
     uint32_t value = 0U;
     uint32_t i = 0U;
@@ -559,23 +576,11 @@ static void rr_parse_args(int argc, char **argv, struct rr_args *out) {
             continue;
         }
         if (rr_starts_with(argv[i], "--script=")) {
-            const char *src = argv[i] + 9;
-            uint32_t n = 0U;
-            while (src[n] != '\0' && n + 1U < sizeof(out->script)) {
-                out->script[n] = src[n];
-                n++;
-            }
-            out->script[n] = '\0';
+            rr_copy_str(out->script, (uint32_t)sizeof(out->script), argv[i] + 9);
             continue;
         }
         if (rr_starts_with(argv[i], "--replay=")) {
-            const char *src = argv[i] + 9;
-            uint32_t n = 0U;
-            while (src[n] != '\0' && n + 1U < sizeof(out->replay)) {
-                out->replay[n] = src[n];
-                n++;
-            }
-            out->replay[n] = '\0';
+            rr_copy_str(out->replay, (uint32_t)sizeof(out->replay), argv[i] + 9);
             continue;
         }
         if (rr_starts_with(argv[i], "--fuzz-lite=")) {
@@ -613,18 +618,11 @@ static void rr_apply_replay_profile(struct rr_args *args) {
     }
 }
 
-void _start(int argc, char **argv) {
-    static const struct rr_case cases[RR_MAX_SCENARIOS] = {
-        { "proc_redirect_reap", rr_scenario_proc_redirect_reap },
-        { "cwd_path_drift", rr_scenario_cwd_drift },
-        { "pipe_close_order_parent_child", rr_scenario_pipe_close_order_parent_child },
-    };
-    struct rr_args args;
+static uint32_t rr_run_cases(const struct rr_case *cases, struct rr_args args) {
     struct rr_ctx ctx;
     uint8_t order[RR_MAX_SCENARIOS];
     uint32_t limit = RR_MAX_SCENARIOS;
 
-    rr_parse_args(argc, argv, &args);
     rr_apply_replay_profile(&args);
     if (args.fuzz_lite != 0U) {
         args.seed ^= (args.fuzz_lite * 2654435761U);
@@ -662,8 +660,32 @@ void _start(int argc, char **argv) {
     rr_emit_json_trace_summary(&ctx);
     if (ctx.failures == 0U) {
         rr_write_str("rr: PASS\n");
-        user_exit(0);
+    } else {
+        rr_write_str("rr: FAIL\n");
     }
-    rr_write_str("rr: FAIL\n");
-    user_exit(1);
+    return ctx.failures;
+}
+
+void _start(int argc, char **argv) {
+    static const struct rr_case cases[RR_MAX_SCENARIOS] = {
+        { "proc_redirect_reap", rr_scenario_proc_redirect_reap },
+        { "cwd_path_drift", rr_scenario_cwd_drift },
+        { "pipe_close_order_parent_child", rr_scenario_pipe_close_order_parent_child },
+    };
+    struct rr_args args;
+    uint32_t failures;
+
+    rr_parse_args(argc, argv, &args);
+    if (rr_eq(args.replay, "matrix_seed1337")) {
+        struct rr_args run_args = args;
+
+        rr_copy_str(run_args.replay, (uint32_t)sizeof(run_args.replay), "all_seed1337");
+        failures = rr_run_cases(cases, run_args);
+        run_args = args;
+        rr_copy_str(run_args.replay, (uint32_t)sizeof(run_args.replay), "quick_seed1337");
+        failures += rr_run_cases(cases, run_args);
+    } else {
+        failures = rr_run_cases(cases, args);
+    }
+    user_exit(failures == 0U ? 0 : 1);
 }

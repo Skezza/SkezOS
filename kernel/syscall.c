@@ -975,6 +975,59 @@ static uint32_t sys_gui_poll(struct syscall_saved_regs *regs) {
     return 1U;
 }
 
+static uint32_t sys_gui_poll_batch(struct syscall_saved_regs *regs) {
+    uint32_t req_ptr = regs->ebx;
+    struct syscall_gui_poll_batch_req req;
+    struct syscall_gui_event events[SYSCALL_GUI_POLL_BATCH_MAX];
+    uint32_t event_cap;
+    uint32_t event_bytes;
+    uint32_t count = 0U;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = uaccess_copy_from_user(&req, req_ptr, (uint32_t)sizeof(req));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    if (req.flags != 0U) {
+        return syscall_ret_err(KERR_INVAL);
+    }
+
+    event_cap = req.event_cap;
+    if (event_cap > SYSCALL_GUI_POLL_BATCH_MAX) {
+        event_cap = SYSCALL_GUI_POLL_BATCH_MAX;
+    }
+    if (event_cap != 0U) {
+        event_bytes = event_cap * (uint32_t)sizeof(struct syscall_gui_event);
+        if (req.events_ptr == 0U || !uaccess_user_range_ok(req.events_ptr, event_bytes)) {
+            return syscall_ret_err(KERR_FAULT);
+        }
+    }
+
+    rc = display_gui_poll_events(req.window_id,
+                                 sched_current_task_pid(),
+                                 events,
+                                 event_cap,
+                                 &count);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    if (count == 0U) {
+        return 0U;
+    }
+
+    rc = uaccess_copy_to_user(req.events_ptr,
+                              events,
+                              count * (uint32_t)sizeof(struct syscall_gui_event));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return count;
+}
+
 static uint32_t sys_gui_destroy(struct syscall_saved_regs *regs) {
     int rc;
 
@@ -983,6 +1036,47 @@ static uint32_t sys_gui_destroy(struct syscall_saved_regs *regs) {
     }
 
     rc = display_gui_destroy_window((int32_t)regs->ebx, sched_current_task_pid());
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 0U;
+}
+
+static uint32_t sys_gui_info(struct syscall_saved_regs *regs) {
+    uint32_t info_ptr = regs->ebx;
+    struct syscall_gui_info info;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = display_gui_collect_info(&info);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    rc = uaccess_copy_to_user(info_ptr, &info, (uint32_t)sizeof(info));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 0U;
+}
+
+static uint32_t sys_gui_window_info(struct syscall_saved_regs *regs) {
+    int32_t window_id = (int32_t)regs->ebx;
+    uint32_t info_ptr = regs->ecx;
+    struct syscall_gui_window_info info;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = display_gui_collect_window_info(window_id, sched_current_task_pid(), &info);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    rc = uaccess_copy_to_user(info_ptr, &info, (uint32_t)sizeof(info));
     if (rc < 0) {
         return syscall_ret_err(-rc);
     }
@@ -1104,6 +1198,12 @@ uint32_t syscall_dispatch(struct syscall_saved_regs *regs) {
             return sys_gui_poll(regs);
         case SYS_GUI_DESTROY:
             return sys_gui_destroy(regs);
+        case SYS_GUI_POLL_BATCH:
+            return sys_gui_poll_batch(regs);
+        case SYS_GUI_INFO:
+            return sys_gui_info(regs);
+        case SYS_GUI_WINDOW_INFO:
+            return sys_gui_window_info(regs);
         default:
             KLOGW("syscall: unknown nr=%u ebx=%x ecx=%x edx=%x",
                   regs->eax, regs->ebx, regs->ecx, regs->edx);

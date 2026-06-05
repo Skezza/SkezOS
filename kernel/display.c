@@ -334,6 +334,8 @@ struct display_gui_window {
     struct syscall_gui_event events[DISPLAY_GUI_EVENT_QUEUE_CAP];
     uint32_t event_head;
     uint32_t event_count;
+    uint32_t dropped_mouse_move_events;
+    uint32_t overflow_drops;
 };
 
 struct display_gui_state {
@@ -354,6 +356,8 @@ struct display_gui_state {
     struct display_gui_dirty_rect clip;
     struct display_gui_dirty_rect dirty[DISPLAY_GUI_DIRTY_MAX];
     uint32_t dirty_count;
+    uint32_t total_dropped_mouse_move_events;
+    uint32_t total_overflow_drops;
     struct display_gui_window windows[DISPLAY_GUI_MAX_WINDOWS];
 };
 
@@ -4169,6 +4173,83 @@ static int display_gui_find_index_by_owner(int owner_pid) {
     return -1;
 }
 
+static uint32_t display_gui_window_id_or_zero(const struct display_gui_window *window) {
+    if (!window || !window->used || window->window_id < 0) {
+        return 0U;
+    }
+    return (uint32_t)window->window_id;
+}
+
+static void display_gui_note_mouse_drop(struct display_gui_window *window) {
+    uint32_t before;
+
+    if (!window) {
+        return;
+    }
+    before = window->dropped_mouse_move_events;
+    window->dropped_mouse_move_events++;
+    g_display_gui.total_dropped_mouse_move_events++;
+    if (before == 0U) {
+        KLOGI("display: gui_queue_drop kind=mouse_move window=%u owner=%d total=%u",
+              display_gui_window_id_or_zero(window),
+              window->owner_pid,
+              window->dropped_mouse_move_events);
+    }
+}
+
+static void display_gui_note_overflow_drop(struct display_gui_window *window,
+                                           uint32_t event_type) {
+    uint32_t before;
+
+    if (!window) {
+        return;
+    }
+    before = window->overflow_drops;
+    window->overflow_drops++;
+    g_display_gui.total_overflow_drops++;
+    if (before == 0U) {
+        KLOGW("display: gui_queue_drop kind=overflow window=%u owner=%d event=%u total=%u",
+              display_gui_window_id_or_zero(window),
+              window->owner_pid,
+              event_type,
+              window->overflow_drops);
+    }
+}
+
+static int display_gui_window_drop_one_mouse_move(struct display_gui_window *window) {
+    uint32_t pos;
+
+    if (!window || window->event_count == 0U) {
+        return 0;
+    }
+    pos = window->event_head;
+    for (uint32_t i = 0U; i < window->event_count; i++) {
+        if (window->events[pos].type == SYSCALL_GUI_EVENT_MOUSE_MOVE) {
+            uint32_t next = (pos + 1U) % DISPLAY_GUI_EVENT_QUEUE_CAP;
+            for (uint32_t j = i + 1U; j < window->event_count; j++) {
+                window->events[pos] = window->events[next];
+                pos = next;
+                next = (next + 1U) % DISPLAY_GUI_EVENT_QUEUE_CAP;
+            }
+            window->event_count--;
+            display_gui_note_mouse_drop(window);
+            return 1;
+        }
+        pos = (pos + 1U) % DISPLAY_GUI_EVENT_QUEUE_CAP;
+    }
+    return 0;
+}
+
+static void display_gui_log_owner_denied(const char *op,
+                                         int requested_owner,
+                                         const struct display_gui_window *window) {
+    KLOGW("display: gui_owner_denied op=%s owner=%d window=%u actual_owner=%d",
+          op ? op : "?",
+          requested_owner,
+          display_gui_window_id_or_zero(window),
+          window ? window->owner_pid : -1);
+}
+
 static int display_gui_window_queue_event(struct display_gui_window *window,
                                           const struct syscall_gui_event *event) {
     uint32_t slot;
@@ -4178,12 +4259,11 @@ static int display_gui_window_queue_event(struct display_gui_window *window,
     }
     if (window->event_count >= DISPLAY_GUI_EVENT_QUEUE_CAP) {
         if (event->type == SYSCALL_GUI_EVENT_MOUSE_MOVE) {
+            display_gui_note_mouse_drop(window);
             return 0;
         }
-        if (window->events[window->event_head].type == SYSCALL_GUI_EVENT_MOUSE_MOVE) {
-            window->event_head = (window->event_head + 1U) % DISPLAY_GUI_EVENT_QUEUE_CAP;
-            window->event_count--;
-        } else {
+        if (!display_gui_window_drop_one_mouse_move(window)) {
+            display_gui_note_overflow_drop(window, event->type);
             return -KERR_NOMEM;
         }
     }
@@ -4259,6 +4339,9 @@ static void display_gui_focus_window(int window_index) {
         return;
     }
     if (old_focus >= 0) {
+        KLOGI("display: gui_focus event=blur window=%u owner=%d",
+              display_gui_window_id_or_zero(&g_display_gui.windows[old_focus]),
+              g_display_gui.windows[old_focus].owner_pid);
         display_gui_emit_simple_event(old_focus,
                                       SYSCALL_GUI_EVENT_BLUR,
                                       0,
@@ -4272,6 +4355,9 @@ static void display_gui_focus_window(int window_index) {
     g_display_gui.focused_index = window_index;
     if (window_index >= 0) {
         display_gui_raise_window(window_index);
+        KLOGI("display: gui_focus event=focus window=%u owner=%d",
+              display_gui_window_id_or_zero(&g_display_gui.windows[window_index]),
+              g_display_gui.windows[window_index].owner_pid);
         display_gui_emit_simple_event(window_index,
                                       SYSCALL_GUI_EVENT_FOCUS,
                                       0,
@@ -4786,6 +4872,7 @@ int display_gui_create_window(const struct syscall_gui_create_req *req, int owne
         return -KERR_INVAL;
     }
     if (display_gui_find_index_by_owner(owner_pid) >= 0) {
+        KLOGW("display: gui_create denied=duplicate owner=%d", owner_pid);
         return -KERR_NOTSUP;
     }
 
@@ -4859,6 +4946,12 @@ int display_gui_create_window(const struct syscall_gui_create_req *req, int owne
     display_gui_mark_dirty(&dirty);
     display_gui_flush_dirty();
     *out_window_id = window->window_id;
+    KLOGI("display: gui_window_create id=%d owner=%d size=%ux%u title=%s",
+          window->window_id,
+          owner_pid,
+          window->width,
+          window->height,
+          window->title);
     return 0;
 }
 
@@ -4877,6 +4970,7 @@ int display_gui_flush_window(const struct syscall_gui_flush_req *req, int owner_
     }
     window = &g_display_gui.windows[index];
     if (window->owner_pid != owner_pid) {
+        display_gui_log_owner_denied("flush", owner_pid, window);
         return -KERR_NOTSUP;
     }
     if (req->pixels_ptr == 0U || req->stride == 0U) {
@@ -4941,6 +5035,7 @@ int display_gui_poll_event(int window_id, int owner_pid, struct syscall_gui_even
     }
     window = &g_display_gui.windows[index];
     if (window->owner_pid != owner_pid) {
+        display_gui_log_owner_denied("poll", owner_pid, window);
         return -KERR_NOTSUP;
     }
     if (window->event_count == 0U) {
@@ -4954,9 +5049,50 @@ int display_gui_poll_event(int window_id, int owner_pid, struct syscall_gui_even
     return 1;
 }
 
+int display_gui_poll_events(int window_id,
+                            int owner_pid,
+                            struct syscall_gui_event *out_events,
+                            uint32_t event_cap,
+                            uint32_t *out_count) {
+    struct display_gui_window *window;
+    uint32_t count = 0U;
+    int index;
+
+    if (!g_display_gui.active || !out_count) {
+        return -KERR_NOTSUP;
+    }
+    *out_count = 0U;
+    if (event_cap > SYSCALL_GUI_POLL_BATCH_MAX) {
+        event_cap = SYSCALL_GUI_POLL_BATCH_MAX;
+    }
+    if (event_cap != 0U && !out_events) {
+        return -KERR_INVAL;
+    }
+    index = display_gui_find_index_by_id(window_id);
+    if (index < 0) {
+        return -KERR_NOENT;
+    }
+    window = &g_display_gui.windows[index];
+    if (window->owner_pid != owner_pid) {
+        display_gui_log_owner_denied("poll_batch", owner_pid, window);
+        return -KERR_NOTSUP;
+    }
+
+    while (count < event_cap && window->event_count != 0U) {
+        uint32_t slot = window->event_head;
+
+        out_events[count++] = window->events[slot];
+        window->event_head = (window->event_head + 1U) % DISPLAY_GUI_EVENT_QUEUE_CAP;
+        window->event_count--;
+    }
+    *out_count = count;
+    return 0;
+}
+
 int display_gui_destroy_window(int window_id, int owner_pid) {
     int index = display_gui_find_index_by_id(window_id);
     struct display_gui_dirty_rect dirty;
+    int destroyed_window_id;
 
     if (!g_display_gui.active) {
         return -KERR_NOTSUP;
@@ -4965,11 +5101,14 @@ int display_gui_destroy_window(int window_id, int owner_pid) {
         return -KERR_NOENT;
     }
     if (g_display_gui.windows[index].owner_pid != owner_pid) {
+        display_gui_log_owner_denied("destroy", owner_pid, &g_display_gui.windows[index]);
         return -KERR_NOTSUP;
     }
 
+    destroyed_window_id = g_display_gui.windows[index].window_id;
     display_gui_window_bounds(&g_display_gui.windows[index], &dirty);
     display_gui_destroy_window_index(index);
+    KLOGI("display: gui_window_destroy id=%d owner=%d", destroyed_window_id, owner_pid);
     display_gui_mark_dirty(&dirty);
     if (g_display_gui.focused_index >= 0) {
         display_gui_window_bounds(&g_display_gui.windows[g_display_gui.focused_index], &dirty);
@@ -4981,6 +5120,69 @@ int display_gui_destroy_window(int window_id, int owner_pid) {
     return 0;
 }
 
+int display_gui_collect_info(struct syscall_gui_info *out_info) {
+    uint32_t count = 0U;
+    int focused_window_id = -1;
+
+    if (!out_info) {
+        return -KERR_INVAL;
+    }
+    for (uint32_t i = 0U; i < DISPLAY_GUI_MAX_WINDOWS; i++) {
+        if (g_display_gui.windows[i].used) {
+            count++;
+        }
+    }
+    if (g_display_gui.focused_index >= 0) {
+        focused_window_id = g_display_gui.windows[g_display_gui.focused_index].window_id;
+    }
+
+    memset(out_info, 0, sizeof(*out_info));
+    out_info->version = SYSCALL_GUI_INFO_VERSION;
+    out_info->active = g_display_gui.active ? 1U : 0U;
+    out_info->max_windows = DISPLAY_GUI_MAX_WINDOWS;
+    out_info->max_width = DISPLAY_GUI_MAX_WIDTH;
+    out_info->max_height = DISPLAY_GUI_MAX_HEIGHT;
+    out_info->event_queue_cap = DISPLAY_GUI_EVENT_QUEUE_CAP;
+    out_info->window_count = count;
+    out_info->focused_window_id = focused_window_id;
+    out_info->total_dropped_mouse_move_events = g_display_gui.total_dropped_mouse_move_events;
+    out_info->total_overflow_drops = g_display_gui.total_overflow_drops;
+    return 0;
+}
+
+int display_gui_collect_window_info(int window_id,
+                                    int owner_pid,
+                                    struct syscall_gui_window_info *out_info) {
+    struct display_gui_window *window;
+    int index;
+
+    if (!g_display_gui.active || !out_info) {
+        return -KERR_NOTSUP;
+    }
+    index = display_gui_find_index_by_id(window_id);
+    if (index < 0) {
+        return -KERR_NOENT;
+    }
+    window = &g_display_gui.windows[index];
+    if (window->owner_pid != owner_pid) {
+        display_gui_log_owner_denied("window_info", owner_pid, window);
+        return -KERR_NOTSUP;
+    }
+
+    memset(out_info, 0, sizeof(*out_info));
+    out_info->window_id = window->window_id;
+    out_info->owner_pid = window->owner_pid;
+    out_info->x = (int32_t)window->x;
+    out_info->y = (int32_t)window->y;
+    out_info->width = window->width;
+    out_info->height = window->height;
+    out_info->focused = index == g_display_gui.focused_index ? 1U : 0U;
+    out_info->queued_events = window->event_count;
+    out_info->dropped_mouse_move_events = window->dropped_mouse_move_events;
+    out_info->overflow_drops = window->overflow_drops;
+    return 0;
+}
+
 void display_gui_notify_task_exit(int owner_pid) {
     struct display_gui_dirty_rect dirty;
 
@@ -4989,8 +5191,10 @@ void display_gui_notify_task_exit(int owner_pid) {
     }
     for (uint32_t i = 0U; i < DISPLAY_GUI_MAX_WINDOWS; i++) {
         if (g_display_gui.windows[i].used && g_display_gui.windows[i].owner_pid == owner_pid) {
+            int window_id = g_display_gui.windows[i].window_id;
             display_gui_window_bounds(&g_display_gui.windows[i], &dirty);
             display_gui_destroy_window_index((int)i);
+            KLOGI("display: gui_task_exit_cleanup owner=%d window=%d", owner_pid, window_id);
             display_gui_mark_dirty(&dirty);
         }
     }
