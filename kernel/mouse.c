@@ -123,5 +123,6 @@ void mouse_init(void) {
         KLOGI("mouse: ps2 auxiliary device enabled");
     }
 
+    irq_mask(2, 0);
     irq_mask(12, 0);
 }

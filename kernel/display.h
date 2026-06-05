@@ -13,6 +13,8 @@ typedef enum {
 struct syscall_gui_event;
 struct syscall_gui_flush_req;
 struct syscall_gui_create_req;
+struct syscall_gui_info;
+struct syscall_gui_window_info;
 
 /* Initialize the active kernel display surface.  The current backend is
  * VGA text mode; future framebuffer support should plug in here without
@@ -51,7 +53,14 @@ int display_gui_mode_active(void);
 int display_gui_create_window(const struct syscall_gui_create_req *req, int owner_pid, int *out_window_id);
 int display_gui_flush_window(const struct syscall_gui_flush_req *req, int owner_pid);
 int display_gui_poll_event(int window_id, int owner_pid, struct syscall_gui_event *out_event);
+int display_gui_poll_events(int window_id,
+                            int owner_pid,
+                            struct syscall_gui_event *out_events,
+                            uint32_t event_cap,
+                            uint32_t *out_count);
 int display_gui_destroy_window(int window_id, int owner_pid);
+int display_gui_collect_info(struct syscall_gui_info *out_info);
+int display_gui_collect_window_info(int window_id, int owner_pid, struct syscall_gui_window_info *out_info);
 void display_gui_notify_task_exit(int owner_pid);
 int display_gui_handle_key_event(uint32_t keycode, uint32_t ch, uint32_t modifiers, int pressed);
 void display_gui_handle_mouse_motion(int32_t dx, int32_t dy);

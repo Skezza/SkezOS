@@ -86,6 +86,29 @@ Add deterministic GUI-regression signals without requiring fragile screenshot co
   - the masked ROI now covers the desktop chrome set: top bar, launcher rail, window frame/titlebar, and operator-sidebar headers
   - subsequent runtime-only navigation work (PS/2 arrow-key focus/view switching inside the framebuffer shell) intentionally preserves the same boot capture and ROI hash; the existing baseline remains the guardrail for default chrome layout
   - runtime panel bodies are now gated separately:
-    - `fb-shell-v6-nav-task` hashes the task-view chrome plus upper body content after a scripted `down` arrow sequence and expects `0x77AFF05E`
+    - `fb-shell-v6-nav-task` hashes the task-view chrome plus the static task-table header after a scripted `down` arrow sequence and expects `0x830F7EA0`
     - `fb-shell-v6-nav-focus` hashes focus/card-sensitive chrome after a scripted `down,right,down,left,up` sequence and expects `0xBFC5F4C6`
   - the navigation smoke currently injects ANSI escape arrows over the serial smoke path and translates them back into keyboard extended scancodes inside the guest, because QMP `send-key` was accepted by QEMU but produced unchanged framebuffer captures under `-display none`
+
+## Current status (2026-06-05)
+- Added GUI chaos/input-pressure coverage:
+  - new target `qemu-smoke-gui-chaos`
+  - `check-nightly` now runs `qemu-smoke-gui-chaos` after `qemu-smoke-gui-nav`
+  - the smoke boots the GUI session, waits for the probe app, injects QMP input, and asserts:
+    - `GUI_PROBE_SELFTEST_OK`
+    - `GUI_PROBE_PRESSURE_WINDOW_OK`
+    - `GUI_PROBE_QUEUE_DROP_OK`
+    - `display: gui_owner_denied op=window_info`
+    - `display: gui_queue_drop kind=overflow`
+- Added masked chaos visual profile:
+  - profile: `fb-shell-v6-chaos`
+  - expected ROI hash: `0x7E05F9CB`
+  - ROI covers the static header and focused `GUI PRESSURE` probe window while its event queue is intentionally saturated
+- Capture/input helper updates:
+  - `scripts/capture_qemu_fb_dump.sh` now supports compact QMP repeat tokens such as `key:a:80`
+  - mouse-motion QMP tokens remain available (`move`, `click`, `drag`), but the headless `-display none` path does not currently deliver PS/2 mouse packets reliably enough for a gating assertion
+- Baseline parser hardening:
+  - `scripts/gui_visual_baseline.py` now consumes only the single PPM raster delimiter after `maxval`
+  - this avoids treating a valid first pixel byte of `0x0A` as header whitespace
+  - the corrected parser and narrowed task-table ROI change the `fb-shell-v6-nav-task` expected hash from `0x77AFF05E` to `0x830F7EA0`; the visual target now fails immediately on either nav-profile mismatch
+  - the nav-task profile excludes the full-width header accent strip because it can vary with boot-time view state after scripted serial input

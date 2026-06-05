@@ -56,7 +56,12 @@ def _read_ppm_p6(path: str) -> Tuple[int, int, bytes]:
             raise ValueError(f"{path}: malformed PPM header token")
         tokens.append(data[start:idx])
 
-    idx = skip_ws_and_comments(idx)
+    if idx >= len(data) or data[idx] not in b" \t\r\n":
+        raise ValueError(f"{path}: malformed PPM raster delimiter")
+    if data[idx] == ord("\r") and idx + 1 < len(data) and data[idx + 1] == ord("\n"):
+        idx += 2
+    else:
+        idx += 1
     width = int(tokens[0])
     height = int(tokens[1])
     maxval = int(tokens[2])
@@ -316,8 +321,12 @@ def _regions_fb_shell_v6_nav_task(width: int, height: int, consts: Dict[str, int
     if layout is None:
         return []
 
-    rects = _regions_fb_shell_v6(width, height, consts)
-    body_rows = min(8, layout["scroll_rows"])
+    rects = [
+        r
+        for idx, r in enumerate(_regions_fb_shell_v6(width, height, consts))
+        if idx != 1
+    ]
+    body_rows = min(1, layout["scroll_rows"])
     if body_rows > 0:
         rects.append(
             Rect(
@@ -351,6 +360,21 @@ def _regions_fb_shell_v6_nav_focus(width: int, height: int, consts: Dict[str, in
     ]
 
 
+def _regions_fb_shell_v6_chaos(width: int, height: int, consts: Dict[str, int]) -> List[Rect]:
+    char_w = consts["DISPLAY_FB_CHAR_W"]
+    char_h = consts["DISPLAY_FB_CHAR_H"]
+    pressure_x = 36 + (2 * 34)
+    pressure_y = 28 + 18 + (2 * 28)
+    pressure_w = 1 + 180 + 1
+    pressure_h = 1 + 24 + 96 + 1
+
+    return [
+        Rect(0, 0, min(width, 36 * char_w), char_h),
+        Rect(0, char_h - 2, width, 2),
+        Rect(pressure_x, pressure_y, pressure_w, pressure_h),
+    ]
+
+
 def _iter_region_payloads(pixels: bytes, width: int, rects: Iterable[Rect]) -> Tuple[int, int]:
     # Return (hash, sampled_pixel_count).
     row_stride = width * 3
@@ -378,6 +402,7 @@ def compute_hash(ppm_path: str, profile: str, display_c_path: str) -> Tuple[int,
         "fb-shell-v6",
         "fb-shell-v6-nav-task",
         "fb-shell-v6-nav-focus",
+        "fb-shell-v6-chaos",
     ):
         raise ValueError(f"unsupported profile: {profile}")
     consts = _load_display_constants(display_c_path)
@@ -387,6 +412,8 @@ def compute_hash(ppm_path: str, profile: str, display_c_path: str) -> Tuple[int,
         rects = _regions_fb_shell_v6_nav_task(width, height, consts)
     elif profile == "fb-shell-v6-nav-focus":
         rects = _regions_fb_shell_v6_nav_focus(width, height, consts)
+    elif profile == "fb-shell-v6-chaos":
+        rects = _regions_fb_shell_v6_chaos(width, height, consts)
     else:
         rects = _regions_fb_shell_v4(width, height, consts)
     clipped: List[Rect] = []

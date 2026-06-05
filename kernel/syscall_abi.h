@@ -6,6 +6,8 @@
 #define SYSCALL_TASK_NAME_MAX 16U
 #define SYSCALL_DIR_ENTRY_NAME_MAX 32U
 #define SYSCALL_CWD_MAX 96U
+#define SYSCALL_GUI_POLL_BATCH_MAX 8U
+#define SYSCALL_GUI_INFO_VERSION 1U
 
 struct syscall_spawn_ex_req {
     uint32_t path_ptr;
@@ -78,6 +80,39 @@ struct syscall_gui_event {
     int32_t v1;
 };
 
+struct syscall_gui_poll_batch_req {
+    int32_t window_id;
+    uint32_t events_ptr;
+    uint32_t event_cap;
+    uint32_t flags;
+};
+
+struct syscall_gui_info {
+    uint32_t version;
+    uint32_t active;
+    uint32_t max_windows;
+    uint32_t max_width;
+    uint32_t max_height;
+    uint32_t event_queue_cap;
+    uint32_t window_count;
+    int32_t focused_window_id;
+    uint32_t total_dropped_mouse_move_events;
+    uint32_t total_overflow_drops;
+};
+
+struct syscall_gui_window_info {
+    int32_t window_id;
+    int32_t owner_pid;
+    int32_t x;
+    int32_t y;
+    uint32_t width;
+    uint32_t height;
+    uint32_t focused;
+    uint32_t queued_events;
+    uint32_t dropped_mouse_move_events;
+    uint32_t overflow_drops;
+};
+
 enum {
     SYS_WRITE = 1,
     SYS_YIELD = 2,
@@ -105,6 +140,9 @@ enum {
     SYS_GUI_FLUSH = 24, /* Copy a dirty rect from a user pixel buffer into a GUI window. */
     SYS_GUI_POLL = 25, /* Poll one GUI event from the owning task's window queue. */
     SYS_GUI_DESTROY = 26, /* Destroy the current task's GUI window. */
+    SYS_GUI_POLL_BATCH = 27, /* Poll up to SYSCALL_GUI_POLL_BATCH_MAX GUI events. */
+    SYS_GUI_INFO = 28, /* Copy global GUI compositor caps and counters. */
+    SYS_GUI_WINDOW_INFO = 29, /* Copy owner-visible state for one GUI window. */
 };
 
 enum {

@@ -139,12 +139,95 @@ if [ -n "$QMP_KEY_SEQUENCE" ]; then
         if [ -z "$key" ]; then
             continue
         fi
-        if ! printf '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"%s"}]}}\n' "$key" >&3; then
-            echo "[capture-qemu-fb-dump] qmp send-key failed for ${key}" >&2
-            exec 3>&-
-            exit 1
-        fi
-        sleep 0.2
+        case "$key" in
+            sleep:*)
+                sleep "${key#sleep:}"
+                ;;
+            key:*)
+                payload="${key#key:}"
+                qcode="${payload%%:*}"
+                count="1"
+                if [ "$payload" != "$qcode" ]; then
+                    count="${payload#*:}"
+                fi
+                i=0
+                while [ "$i" -lt "$count" ]; do
+                    if ! printf '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"%s"}]}}\n' "$qcode" >&3; then
+                        echo "[capture-qemu-fb-dump] qmp send-key failed for ${key}" >&2
+                        exec 3>&-
+                        exit 1
+                    fi
+                    i=$((i + 1))
+                    sleep 0.02
+                done
+                ;;
+            move:*)
+                payload="${key#move:}"
+                dx="${payload%%:*}"
+                rest="${payload#*:}"
+                dy="${rest%%:*}"
+                count="1"
+                if [ "$rest" != "$dy" ]; then
+                    count="${rest#*:}"
+                fi
+                i=0
+                while [ "$i" -lt "$count" ]; do
+                    if ! printf '{"execute":"input-send-event","arguments":{"events":[{"type":"rel","data":{"axis":"x","value":%s}},{"type":"rel","data":{"axis":"y","value":%s}}]}}\n' "$dx" "$dy" >&3; then
+                        echo "[capture-qemu-fb-dump] qmp mouse move failed for ${key}" >&2
+                        exec 3>&-
+                        exit 1
+                    fi
+                    i=$((i + 1))
+                    sleep 0.01
+                done
+                ;;
+            btn:*)
+                payload="${key#btn:}"
+                button="${payload%%:*}"
+                state="${payload#*:}"
+                down="false"
+                if [ "$state" = "down" ]; then
+                    down="true"
+                fi
+                if ! printf '{"execute":"input-send-event","arguments":{"events":[{"type":"btn","data":{"button":"%s","down":%s}}]}}\n' "$button" "$down" >&3; then
+                    echo "[capture-qemu-fb-dump] qmp mouse button failed for ${key}" >&2
+                    exec 3>&-
+                    exit 1
+                fi
+                sleep 0.05
+                ;;
+            click:*)
+                button="${key#click:}"
+                if ! printf '{"execute":"input-send-event","arguments":{"events":[{"type":"btn","data":{"button":"%s","down":true}}]}}\n' "$button" >&3 ||
+                   ! printf '{"execute":"input-send-event","arguments":{"events":[{"type":"btn","data":{"button":"%s","down":false}}]}}\n' "$button" >&3; then
+                    echo "[capture-qemu-fb-dump] qmp mouse click failed for ${key}" >&2
+                    exec 3>&-
+                    exit 1
+                fi
+                sleep 0.1
+                ;;
+            drag:*)
+                payload="${key#drag:}"
+                dx="${payload%%:*}"
+                dy="${payload#*:}"
+                if ! printf '{"execute":"input-send-event","arguments":{"events":[{"type":"btn","data":{"button":"left","down":true}}]}}\n' >&3 ||
+                   ! printf '{"execute":"input-send-event","arguments":{"events":[{"type":"rel","data":{"axis":"x","value":%s}},{"type":"rel","data":{"axis":"y","value":%s}}]}}\n' "$dx" "$dy" >&3 ||
+                   ! printf '{"execute":"input-send-event","arguments":{"events":[{"type":"btn","data":{"button":"left","down":false}}]}}\n' >&3; then
+                    echo "[capture-qemu-fb-dump] qmp mouse drag failed for ${key}" >&2
+                    exec 3>&-
+                    exit 1
+                fi
+                sleep 0.1
+                ;;
+            *)
+                if ! printf '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"%s"}]}}\n' "$key" >&3; then
+                    echo "[capture-qemu-fb-dump] qmp send-key failed for ${key}" >&2
+                    exec 3>&-
+                    exit 1
+                fi
+                sleep 0.2
+                ;;
+        esac
     done
 fi
 

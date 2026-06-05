@@ -1,6 +1,8 @@
 # Build artifacts
 build/
+build-gui/
 iso/boot/kernel.elf
 kernel/initramfs_demo_blob.c
 serial.log
 skezos.iso
+skezos-gui.iso

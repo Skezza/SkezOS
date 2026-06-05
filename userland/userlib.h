@@ -172,8 +172,31 @@ static inline int32_t user_gui_poll(int32_t window_id, struct syscall_gui_event 
     return user_syscall2(SYS_GUI_POLL, (uint32_t)window_id, (uint32_t)(uintptr_t)event);
 }
 
+static inline int32_t user_gui_poll_batch(int32_t window_id,
+                                          struct syscall_gui_event *events,
+                                          uint32_t event_cap) {
+    struct syscall_gui_poll_batch_req req;
+
+    req.window_id = window_id;
+    req.events_ptr = event_cap == 0U ? 0U : (uint32_t)(uintptr_t)events;
+    req.event_cap = event_cap;
+    req.flags = 0U;
+    return user_syscall1(SYS_GUI_POLL_BATCH, (uint32_t)(uintptr_t)&req);
+}
+
 static inline int32_t user_gui_destroy(int32_t window_id) {
     return user_syscall1(SYS_GUI_DESTROY, (uint32_t)window_id);
+}
+
+static inline int32_t user_gui_info(struct syscall_gui_info *info) {
+    return user_syscall1(SYS_GUI_INFO, (uint32_t)(uintptr_t)info);
+}
+
+static inline int32_t user_gui_window_info(int32_t window_id,
+                                           struct syscall_gui_window_info *info) {
+    return user_syscall2(SYS_GUI_WINDOW_INFO,
+                         (uint32_t)window_id,
+                         (uint32_t)(uintptr_t)info);
 }
 
 static inline void user_yield(void) {
