@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "display.h"
 #include "idt.h"
 #include "kerrno.h"
 #include "kfile.h"
@@ -415,7 +416,7 @@ static uint32_t sys_spawn_ex(struct syscall_saved_regs *regs) {
     if (req.cmdline_len != 0U && req.cmdline_ptr == 0U) {
         return syscall_ret_err(KERR_INVAL);
     }
-    if ((req.flags & ~SYSCALL_SPAWN_FLAG_INHERIT_FDS) != 0U) {
+    if ((req.flags & ~(SYSCALL_SPAWN_FLAG_INHERIT_FDS | SYSCALL_SPAWN_FLAG_FOREGROUND)) != 0U) {
         return syscall_ret_err(KERR_INVAL);
     }
 
@@ -446,6 +447,10 @@ static uint32_t sys_spawn_ex(struct syscall_saved_regs *regs) {
               child_pid,
               req.flags);
         return syscall_ret_err(-child_pid);
+    }
+    if ((req.flags & SYSCALL_SPAWN_FLAG_FOREGROUND) != 0U &&
+        vfs_console_input_owner_is_task(sched_current_task_pid())) {
+        (void)vfs_console_set_input_owner_task(child_pid);
     }
     return (uint32_t)child_pid;
 }
@@ -898,6 +903,92 @@ static uint32_t sys_getcmdline(struct syscall_saved_regs *regs) {
     return copied_len;
 }
 
+static uint32_t sys_gui_create(struct syscall_saved_regs *regs) {
+    uint32_t req_ptr = regs->ebx;
+    struct syscall_gui_create_req req;
+    int window_id = -1;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = uaccess_copy_from_user(&req, req_ptr, (uint32_t)sizeof(req));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+
+    rc = display_gui_create_window(&req, sched_current_task_pid(), &window_id);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return (uint32_t)window_id;
+}
+
+static uint32_t sys_gui_flush(struct syscall_saved_regs *regs) {
+    uint32_t req_ptr = regs->ebx;
+    struct syscall_gui_flush_req req;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = uaccess_copy_from_user(&req, req_ptr, (uint32_t)sizeof(req));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+
+    rc = display_gui_flush_window(&req, sched_current_task_pid());
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 0;
+}
+
+static uint32_t sys_gui_poll(struct syscall_saved_regs *regs) {
+    int32_t window_id = (int32_t)regs->ebx;
+    uint32_t event_ptr = regs->ecx;
+    struct syscall_gui_event event;
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+    if (event_ptr == 0U ||
+        !uaccess_user_range_ok(event_ptr, (uint32_t)sizeof(event))) {
+        return syscall_ret_err(KERR_FAULT);
+    }
+
+    rc = display_gui_poll_event(window_id, sched_current_task_pid(), &event);
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    if (rc == 0) {
+        return 0U;
+    }
+
+    rc = uaccess_copy_to_user(event_ptr, &event, (uint32_t)sizeof(event));
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 1U;
+}
+
+static uint32_t sys_gui_destroy(struct syscall_saved_regs *regs) {
+    int rc;
+
+    if (!sched_current_task_is_user()) {
+        return syscall_ret_err(KERR_NOTSUP);
+    }
+
+    rc = display_gui_destroy_window((int32_t)regs->ebx, sched_current_task_pid());
+    if (rc < 0) {
+        return syscall_ret_err(-rc);
+    }
+    return 0U;
+}
+
 static uint32_t sys_yield(void) {
     sched_yield();
     return 0;
@@ -1005,6 +1096,14 @@ uint32_t syscall_dispatch(struct syscall_saved_regs *regs) {
             return sys_unlink(regs);
         case SYS_FORK:
             return sys_fork(regs);
+        case SYS_GUI_CREATE:
+            return sys_gui_create(regs);
+        case SYS_GUI_FLUSH:
+            return sys_gui_flush(regs);
+        case SYS_GUI_POLL:
+            return sys_gui_poll(regs);
+        case SYS_GUI_DESTROY:
+            return sys_gui_destroy(regs);
         default:
             KLOGW("syscall: unknown nr=%u ebx=%x ecx=%x edx=%x",
                   regs->eax, regs->ebx, regs->ecx, regs->edx);

@@ -3,20 +3,27 @@ CC     = gcc
 AS     = as
 LD     = ld
 QEMU   ?= qemu-system-i386
+GUI_BOOT ?= 0
 
 # Flags for building a freestanding 32‑bit kernel.  We disable stack
 # protector and all floating point support.  We also disable PIE and
 # built‑ins so that no assumptions are made about the runtime
 # environment.
- CFLAGS = -ffreestanding -fno-pic -m32 -O2 -Wall -Wextra \
-          -nostdlib -fno-builtin -fno-stack-protector -mno-sse \
-          -mno-sse2 -mno-red-zone -mno-80387
+CFLAGS = -ffreestanding -fno-pic -m32 -O2 -Wall -Wextra \
+         -nostdlib -fno-builtin -fno-stack-protector -mno-sse \
+         -mno-sse2 -mno-red-zone -mno-80387 \
+         -DSKEZOS_GUI_BOOT=$(GUI_BOOT)
 ASFLAGS = --32
 LDFLAGS = -m elf_i386
 
 # Build directories
+ifeq ($(GUI_BOOT),1)
+BUILD = build-gui
+ISO   = skezos-gui.iso
+else
 BUILD = build
 ISO   = skezos.iso
+endif
 SMOKE_LOG = $(BUILD)/qemu-smoke.log
 LIFECYCLE_SMOKE_LOG = $(BUILD)/qemu-smoke-lifecycle.log
 SMOKE_TIMEOUT_SECS ?= 18
@@ -31,13 +38,17 @@ NIGHTLY_GUI_TRIAGE_BOOT_WAIT_SECS ?= 16
 NIGHTLY_GUI_TRIAGE_ARTIFACT_DIR ?= $(BUILD)/artifacts
 GUI_VISUAL_BASELINE_BOOT_WAIT_SECS ?= 16
 GUI_VISUAL_BASELINE_ARTIFACT_DIR ?= $(BUILD)/artifacts
-GUI_VISUAL_BASELINE_HASH_FB_SHELL_V5 ?= 0x1BD7880D
+GUI_VISUAL_BASELINE_HASH_FB_SHELL_V6 ?= 0x17AA9EDD
+GUI_NAV_BOOT_WAIT_SECS ?= 16
+GUI_NAV_ARTIFACT_DIR ?= $(BUILD)/artifacts
+GUI_VISUAL_BASELINE_HASH_FB_SHELL_V6_NAV_TASK ?= 0x77AFF05E
+GUI_VISUAL_BASELINE_HASH_FB_SHELL_V6_NAV_FOCUS ?= 0xBFC5F4C6
 SMOKE_MARKER = SKEZOS_SMOKE_READY
 RELIABILITY_JSON_VALIDATOR = ./scripts/validate_reliability_json.sh
 RELIABILITY_JSON_REPORTER = ./scripts/reliability_json_report.sh
 REPLAY_HASH_ALL_SEED1337 ?= 2002305826
 REPLAY_HASH_QUICK_SEED1337 ?= 2923080070
-GUI_STATE_HASH_FB_SHELL_V5 ?= 0x9A4C1DA5
+GUI_STATE_HASH_FB_SHELL_V6 ?= 0xAAA213A9
 PHASE4_REPEAT ?= 3
 STORAGE_DISK_SIZE_MB ?= 16
 STORAGE_RUN_DISK = $(BUILD)/storage-run.img
@@ -53,8 +64,9 @@ USERLAND_ASFLAGS = $(ASFLAGS) -I userland
 USERLAND_CFLAGS = $(CFLAGS) -I userland
 USERLAND_LDFLAGS = $(LDFLAGS) -nostdlib -N -e _start
 
-SRCS  = $(wildcard kernel/*.c)
+SRCS  = $(filter-out kernel/initramfs_demo_blob.c,$(wildcard kernel/*.c))
 OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SRCS))
+INITRAMFS_BLOB_OBJ = $(BUILD)/initramfs_demo_blob.o
 
 ASM_OBJS = $(BUILD)/idt_load.o $(BUILD)/sched_switch.o $(BUILD)/gdt_flush.o $(BUILD)/syscall_entry.o $(BUILD)/user_demo_blob.o
 
@@ -77,7 +89,10 @@ USERLAND_OBJS = \
 	$(USERLAND_BUILD)/reliability_runner_slot15.o \
 	$(USERLAND_BUILD)/rm_slot16.o \
 	$(USERLAND_BUILD)/forktest_slot17.o \
-	$(USERLAND_BUILD)/sleep2_slot18.o
+	$(USERLAND_BUILD)/sleep2_slot18.o \
+	$(USERLAND_BUILD)/gui_console_slot19.o \
+	$(USERLAND_BUILD)/gui_demo_slot20.o \
+	$(USERLAND_BUILD)/gui_session_slot21.o
 
 USERLAND_ELFS = \
 	$(USERLAND_BUILD)/hello.elf \
@@ -98,9 +113,12 @@ USERLAND_ELFS = \
 	$(USERLAND_BUILD)/reliability_runner.elf \
 	$(USERLAND_BUILD)/rm.elf \
 	$(USERLAND_BUILD)/forktest.elf \
-	$(USERLAND_BUILD)/sleep2.elf
+	$(USERLAND_BUILD)/sleep2.elf \
+	$(USERLAND_BUILD)/gui_console.elf \
+	$(USERLAND_BUILD)/gui_demo.elf \
+	$(USERLAND_BUILD)/gui_session.elf
 
-.PHONY: all run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-shell-script-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-fb-dump qemu-smoke-gui-visual-baseline qemu-smoke-gui-visual-baseline-refresh qemu-smoke-storage-integrity qemu-smoke-storage-persist qemu-smoke-storage-replay qemu-smoke-shell-history-persist qemu-smoke-fork-cow qemu-smoke-fork-cow-stress qemu-smoke-fork-cow-pressure qemu-smoke-shell-bg-replay check check-pr check-release check-nightly
+.PHONY: all run gui-iso gui-run clean toolchain-check qemu-smoke qemu-smoke-userfault qemu-smoke-phase4 qemu-smoke-phase4-repeat qemu-smoke-lifecycle qemu-smoke-shell-core qemu-smoke-shell-script-core qemu-smoke-reliability qemu-smoke-reliability-replay qemu-smoke-reliability-fuzz-lite-matrix qemu-smoke-gui-session qemu-smoke-gui-fb-dump qemu-smoke-gui-visual-baseline qemu-smoke-gui-visual-baseline-refresh qemu-smoke-gui-nav qemu-smoke-storage-integrity qemu-smoke-storage-persist qemu-smoke-storage-replay qemu-smoke-shell-history-persist qemu-smoke-fork-cow qemu-smoke-fork-cow-stress qemu-smoke-fork-cow-pressure qemu-smoke-shell-bg-replay check check-pr check-release check-nightly
 
 all: $(ISO)
 
@@ -115,7 +133,7 @@ $(BUILD)/multiboot2_header.o: boot/multiboot2_header.S
 $(BUILD)/loader.o: boot/loader.S
 	$(AS) $(ASFLAGS) $< -o $@
 
-$(BUILD)/kernel.elf: $(BUILD)/multiboot2_header.o $(BUILD)/loader.o $(ASM_OBJS) $(OBJS)
+$(BUILD)/kernel.elf: $(BUILD)/multiboot2_header.o $(BUILD)/loader.o $(ASM_OBJS) $(OBJS) $(INITRAMFS_BLOB_OBJ)
 	$(LD) $(LDFLAGS) -T kernel/linker.ld -o $@ $^
 
 $(BUILD)/initramfs_demo_blob.o: kernel/initramfs_demo_blob.c
@@ -127,6 +145,10 @@ $(USERLAND_BUILD)/%.o: userland/%.S userland/runtime.inc userland/syscall_abi.in
 $(USERLAND_BUILD)/%.o: userland/%.c userland/userlib.h
 	@mkdir -p $(USERLAND_BUILD)
 	$(CC) $(USERLAND_CFLAGS) -c $< -o $@
+
+$(USERLAND_BUILD)/gui_console_slot19.o: userland/guilib.h
+$(USERLAND_BUILD)/gui_demo_slot20.o: userland/guilib.h
+$(USERLAND_BUILD)/gui_session_slot21.o: userland/guilib.h
 
 $(USERLAND_BUILD)/hello.elf: $(USERLAND_BUILD)/hello_slot0.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01410000 -o $@ $<
@@ -185,6 +207,15 @@ $(USERLAND_BUILD)/forktest.elf: $(USERLAND_BUILD)/forktest_slot17.o
 $(USERLAND_BUILD)/sleep2.elf: $(USERLAND_BUILD)/sleep2_slot18.o
 	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01544000 -o $@ $<
 
+$(USERLAND_BUILD)/gui_console.elf: $(USERLAND_BUILD)/gui_console_slot19.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01600000 -o $@ $<
+
+$(USERLAND_BUILD)/gui_demo.elf: $(USERLAND_BUILD)/gui_demo_slot20.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01800000 -o $@ $<
+
+$(USERLAND_BUILD)/gui_session.elf: $(USERLAND_BUILD)/gui_session_slot21.o
+	$(LD) $(USERLAND_LDFLAGS) -Ttext 0x01555000 -o $@ $<
+
 $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	@rm -rf $(INITRAMFS_STAGING)
 	@mkdir -p $(INITRAMFS_STAGING)/bin
@@ -207,6 +238,9 @@ $(INITRAMFS_STAGING)/.stamp: $(USERLAND_ELFS) userland/readme.txt
 	cp $(USERLAND_BUILD)/rm.elf $(INITRAMFS_STAGING)/bin/rm.elf
 	cp $(USERLAND_BUILD)/forktest.elf $(INITRAMFS_STAGING)/bin/forktest.elf
 	cp $(USERLAND_BUILD)/sleep2.elf $(INITRAMFS_STAGING)/bin/sleep2.elf
+	cp $(USERLAND_BUILD)/gui_console.elf $(INITRAMFS_STAGING)/bin/gui_console.elf
+	cp $(USERLAND_BUILD)/gui_demo.elf $(INITRAMFS_STAGING)/bin/gui_demo.elf
+	cp $(USERLAND_BUILD)/gui_session.elf $(INITRAMFS_STAGING)/bin/gui_session.elf
 	cp userland/readme.txt $(INITRAMFS_STAGING)/bin/readme.txt
 	@touch $@
 
@@ -230,6 +264,12 @@ run: $(ISO) $(STORAGE_RUN_DISK)
 		-display gtk \
 		-serial mon:stdio \
 		-monitor none \
+
+gui-iso:
+	$(MAKE) GUI_BOOT=1 skezos-gui.iso
+
+gui-run:
+	$(MAKE) GUI_BOOT=1 run
 
 toolchain-check:
 	@missing=0; \
@@ -320,6 +360,15 @@ qemu-smoke-userfault: $(ISO)
 		exit 1; \
 	fi
 	@echo "[qemu-smoke-userfault] PASS"
+
+qemu-smoke-gui-session:
+	@$(MAKE) GUI_BOOT=1 qemu-smoke
+	@if ! grep -Fq "GUI: SESSION READY" build-gui/qemu-smoke.log; then \
+		echo "[qemu-smoke-gui-session] Missing GUI session marker"; \
+		tail -n 160 build-gui/qemu-smoke.log; \
+		exit 1; \
+	fi
+	@echo "[qemu-smoke-gui-session] PASS"
 
 qemu-smoke-phase4:
 	@$(MAKE) qemu-smoke SMOKE_LOG=$(BUILD)/qemu-smoke-phase4.log
@@ -718,7 +767,7 @@ endef
 
 define ASSERT_GUI_HASH_IF_FB
 @if grep -Fq "display: framebuffer console active" $(2); then \
-	if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V5) profile=fb-shell-v5" $(2); then \
+	if ! grep -Fq "display: gui_state_hash=$(GUI_STATE_HASH_FB_SHELL_V6) profile=fb-shell-v6" $(2); then \
 		echo "[$(1)] Missing or changed framebuffer GUI state hash"; \
 		tail -n 220 $(2); \
 		exit 1; \
@@ -1879,7 +1928,7 @@ qemu-smoke-gui-visual-baseline: $(ISO)
 	log="$(GUI_VISUAL_BASELINE_ARTIFACT_DIR)/gui-fb-baseline-$${stamp}.qemu.log"; \
 	echo "[qemu-smoke-gui-visual-baseline] Capturing framebuffer baseline artifact to $$dump (qmp_port=$$port)"; \
 	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump" "$$log" "$(GUI_VISUAL_BASELINE_BOOT_WAIT_SECS)" "$$port" baseline; \
-	./scripts/gui_visual_baseline.py verify --ppm "$$dump" --profile fb-shell-v5 --expect-hash "$(GUI_VISUAL_BASELINE_HASH_FB_SHELL_V5)"
+	./scripts/gui_visual_baseline.py verify --ppm "$$dump" --profile fb-shell-v6 --expect-hash "$(GUI_VISUAL_BASELINE_HASH_FB_SHELL_V6)"
 	@echo "[qemu-smoke-gui-visual-baseline] PASS"
 
 qemu-smoke-gui-visual-baseline-refresh: $(ISO)
@@ -1890,7 +1939,24 @@ qemu-smoke-gui-visual-baseline-refresh: $(ISO)
 	log="$(GUI_VISUAL_BASELINE_ARTIFACT_DIR)/gui-fb-baseline-refresh-$${stamp}.qemu.log"; \
 	echo "[qemu-smoke-gui-visual-baseline-refresh] Capturing framebuffer artifact to $$dump (qmp_port=$$port)"; \
 	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump" "$$log" "$(GUI_VISUAL_BASELINE_BOOT_WAIT_SECS)" "$$port" baseline; \
-	./scripts/gui_visual_baseline.py hash --ppm "$$dump" --profile fb-shell-v5
+	./scripts/gui_visual_baseline.py hash --ppm "$$dump" --profile fb-shell-v6
+
+qemu-smoke-gui-nav: $(ISO)
+	@mkdir -p $(GUI_NAV_ARTIFACT_DIR)
+	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
+	port_a=$$((46000 + ($$$$ % 1000))); \
+	port_b=$$((47000 + ($$$$ % 1000))); \
+	dump_a="$(GUI_NAV_ARTIFACT_DIR)/gui-fb-nav-task-$${stamp}.ppm"; \
+	log_a="$(GUI_NAV_ARTIFACT_DIR)/gui-fb-nav-task-$${stamp}.qemu.log"; \
+	dump_b="$(GUI_NAV_ARTIFACT_DIR)/gui-fb-nav-focus-$${stamp}.ppm"; \
+	log_b="$(GUI_NAV_ARTIFACT_DIR)/gui-fb-nav-focus-$${stamp}.qemu.log"; \
+	echo "[qemu-smoke-gui-nav] Capturing TASK view artifact to $$dump_a (qmp_port=$$port_a)"; \
+	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump_a" "$$log_a" "$(GUI_NAV_BOOT_WAIT_SECS)" "$$port_a" nav-task "" "down"; \
+	./scripts/gui_visual_baseline.py verify --ppm "$$dump_a" --profile fb-shell-v6-nav-task --expect-hash "$(GUI_VISUAL_BASELINE_HASH_FB_SHELL_V6_NAV_TASK)"; \
+	echo "[qemu-smoke-gui-nav] Capturing multi-step focus artifact to $$dump_b (qmp_port=$$port_b)"; \
+	./scripts/capture_qemu_fb_dump.sh "$(ISO)" "$$dump_b" "$$log_b" "$(GUI_NAV_BOOT_WAIT_SECS)" "$$port_b" nav-focus "" "down,right,down,left,up"; \
+	./scripts/gui_visual_baseline.py verify --ppm "$$dump_b" --profile fb-shell-v6-nav-focus --expect-hash "$(GUI_VISUAL_BASELINE_HASH_FB_SHELL_V6_NAV_FOCUS)"
+	@echo "[qemu-smoke-gui-nav] PASS"
 
 check-pr:
 	@$(MAKE) toolchain-check
@@ -1939,6 +2005,9 @@ check-nightly:
 	fi; \
 	if [ $$rc -eq 0 ]; then \
 		$(MAKE) qemu-smoke-shell-bg-replay || rc=$$?; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		$(MAKE) qemu-smoke-gui-nav || rc=$$?; \
 	fi; \
 	if [ $$rc -eq 0 ]; then \
 		$(MAKE) qemu-smoke-gui-visual-baseline || rc=$$?; \

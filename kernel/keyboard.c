@@ -1,7 +1,9 @@
 #include "keyboard.h"
+#include "display.h"
 #include "utils.h"
 #include "irq.h"
 #include "serial.h"
+#include "syscall_abi.h"
 #include "vga.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -37,6 +39,71 @@ static const char kbd_us_shift[128] = {
 
 static bool shift_pressed = false;
 static bool keyboard_verbose = false;
+static bool extended_prefix = false;
+
+static uint32_t kbd_modifiers(void) {
+    return shift_pressed ? SYSCALL_GUI_MOD_SHIFT : 0U;
+}
+
+static uint32_t kbd_gui_keycode_for_extended(uint8_t scancode) {
+    switch (scancode) {
+    case 0x48:
+        return SYSCALL_GUI_KEY_UP;
+    case 0x50:
+        return SYSCALL_GUI_KEY_DOWN;
+    case 0x4B:
+        return SYSCALL_GUI_KEY_LEFT;
+    case 0x4D:
+        return SYSCALL_GUI_KEY_RIGHT;
+    default:
+        return SYSCALL_GUI_KEY_NONE;
+    }
+}
+
+static uint32_t kbd_gui_keycode_for_scancode(uint8_t scancode) {
+    switch (scancode) {
+    case 0x01:
+        return SYSCALL_GUI_KEY_ESCAPE;
+    case 0x0E:
+        return SYSCALL_GUI_KEY_BACKSPACE;
+    case 0x0F:
+        return SYSCALL_GUI_KEY_TAB;
+    case 0x1C:
+        return SYSCALL_GUI_KEY_ENTER;
+    case 0x39:
+        return SYSCALL_GUI_KEY_SPACE;
+    default:
+        return SYSCALL_GUI_KEY_NONE;
+    }
+}
+
+static int kbd_gui_route_key(uint32_t keycode, uint32_t ch, int pressed) {
+    if (!display_gui_mode_active()) {
+        return 0;
+    }
+    return display_gui_handle_key_event(keycode, ch, kbd_modifiers(), pressed);
+}
+
+static int kbd_try_handle_extended_press(uint8_t scancode) {
+    uint32_t gui_keycode = kbd_gui_keycode_for_extended(scancode);
+
+    if (gui_keycode != SYSCALL_GUI_KEY_NONE &&
+        kbd_gui_route_key(gui_keycode, 0U, 1)) {
+        return 1;
+    }
+    switch (scancode) {
+    case 0x48:
+        return display_handle_navigation_key(DISPLAY_NAV_KEY_UP);
+    case 0x50:
+        return display_handle_navigation_key(DISPLAY_NAV_KEY_DOWN);
+    case 0x4B:
+        return display_handle_navigation_key(DISPLAY_NAV_KEY_LEFT);
+    case 0x4D:
+        return display_handle_navigation_key(DISPLAY_NAV_KEY_RIGHT);
+    default:
+        return 0;
+    }
+}
 
 static void kbd_buffer_put(char ch) {
     uint8_t next = (kbd_head + 1) % KBD_BUF_SIZE;
@@ -56,20 +123,51 @@ static void keyboard_handler(void *ctx) {
         serial_writechar((scancode & 0xF) < 10 ? '0' + (scancode & 0xF) : 'A' + (scancode & 0xF) - 10);
         serial_writestr("\n");
     }
+    if (scancode == 0xE0) {
+        extended_prefix = true;
+        return;
+    }
+    if (extended_prefix) {
+        uint8_t code = scancode & 0x7F;
+
+        if ((scancode & 0x80U) == 0U) {
+            (void)kbd_try_handle_extended_press(code);
+        } else {
+            uint32_t gui_keycode = kbd_gui_keycode_for_extended(code);
+            if (gui_keycode != SYSCALL_GUI_KEY_NONE) {
+                (void)kbd_gui_route_key(gui_keycode, 0U, 0);
+            }
+        }
+        extended_prefix = false;
+        return;
+    }
     if (scancode & 0x80) {
         /* Key release */
         uint8_t code = scancode & 0x7F;
         if (code == 0x2A || code == 0x36) {
             shift_pressed = false;
         }
+        {
+            uint32_t gui_keycode = kbd_gui_keycode_for_scancode(code);
+            if (gui_keycode != SYSCALL_GUI_KEY_NONE) {
+                (void)kbd_gui_route_key(gui_keycode, 0U, 0);
+            }
+        }
         return;
     } else {
         /* Key press */
+        uint32_t gui_keycode = kbd_gui_keycode_for_scancode(scancode);
+
         if (scancode == 0x2A || scancode == 0x36) {
             shift_pressed = true;
             return;
         }
         char ch = shift_pressed ? kbd_us_shift[scancode] : kbd_us[scancode];
+        if (display_gui_mode_active()) {
+            if (kbd_gui_route_key(gui_keycode, (uint32_t)(uint8_t)ch, 1)) {
+                return;
+            }
+        }
         if (ch != 0) {
             kbd_buffer_put(ch);
         }
@@ -166,16 +264,48 @@ void kbd_feed_ascii(char c) {
 }
 
 void kbd_feed_scancode(uint8_t scancode) {
+    if (scancode == 0xE0) {
+        extended_prefix = true;
+        return;
+    }
+    if (extended_prefix) {
+        uint8_t code = scancode & 0x7FU;
+
+        if ((scancode & 0x80U) == 0U) {
+            (void)kbd_try_handle_extended_press(code);
+        } else {
+            uint32_t gui_keycode = kbd_gui_keycode_for_extended(code);
+            if (gui_keycode != SYSCALL_GUI_KEY_NONE) {
+                (void)kbd_gui_route_key(gui_keycode, 0U, 0);
+            }
+        }
+        extended_prefix = false;
+        return;
+    }
     if (scancode & 0x80) {
         uint8_t code = scancode & 0x7F;
         if (code == 0x2A || code == 0x36) {
             shift_pressed = false;
+        }
+        {
+            uint32_t gui_keycode = kbd_gui_keycode_for_scancode(code);
+            if (gui_keycode != SYSCALL_GUI_KEY_NONE) {
+                (void)kbd_gui_route_key(gui_keycode, 0U, 0);
+            }
         }
         return;
     }
     if (scancode == 0x2A || scancode == 0x36) {
         shift_pressed = true;
         return;
+    }
+    {
+        uint32_t gui_keycode = kbd_gui_keycode_for_scancode(scancode);
+        char ch = shift_pressed ? kbd_us_shift[scancode] : kbd_us[scancode];
+        if (display_gui_mode_active() &&
+            kbd_gui_route_key(gui_keycode, (uint32_t)(uint8_t)ch, 1)) {
+            return;
+        }
     }
     char ch = shift_pressed ? kbd_us_shift[scancode] : kbd_us[scancode];
     if (ch == 0) {

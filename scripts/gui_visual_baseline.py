@@ -107,6 +107,16 @@ def _load_display_constants(display_c_path: str) -> Dict[str, int]:
         "DISPLAY_FB_PANEL_BORDER",
         "DISPLAY_FB_LINE_GUTTER_WIDTH",
         "DISPLAY_FB_LINE_GUTTER_GAP",
+        "DISPLAY_FB_STAGE_MARGIN_X",
+        "DISPLAY_FB_STAGE_MARGIN_Y",
+        "DISPLAY_FB_STAGE_GAP",
+        "DISPLAY_FB_DOCK_WIDTH",
+        "DISPLAY_FB_SIDEBAR_WIDTH",
+        "DISPLAY_FB_WINDOW_TITLE_H",
+        "DISPLAY_FB_WINDOW_INSET_X",
+        "DISPLAY_FB_WINDOW_INSET_Y",
+        "DISPLAY_FB_SIDEBAR_CARD_GAP",
+        "DISPLAY_FB_SIDEBAR_CARD_H",
     }
     found: Dict[str, int] = {}
     define_re = re.compile(r"^#define\s+([A-Z0-9_]+)\s+([0-9]+)U?\s*$")
@@ -177,6 +187,170 @@ def _regions_fb_shell_v4(width: int, height: int, consts: Dict[str, int]) -> Lis
     ]
 
 
+def _layout_fb_shell_v6(width: int, height: int, consts: Dict[str, int]) -> Dict[str, int] | None:
+    char_w = consts["DISPLAY_FB_CHAR_W"]
+    char_h = consts["DISPLAY_FB_CHAR_H"]
+    header_rows = consts["DISPLAY_FB_HEADER_ROWS"]
+    footer_rows = consts["DISPLAY_FB_FOOTER_ROWS"]
+    panel_border = consts["DISPLAY_FB_PANEL_BORDER"]
+    stage_margin_x = consts["DISPLAY_FB_STAGE_MARGIN_X"]
+    stage_margin_y = consts["DISPLAY_FB_STAGE_MARGIN_Y"]
+    stage_gap = consts["DISPLAY_FB_STAGE_GAP"]
+    dock_width = consts["DISPLAY_FB_DOCK_WIDTH"]
+    sidebar_width = consts["DISPLAY_FB_SIDEBAR_WIDTH"]
+    window_title_h = consts["DISPLAY_FB_WINDOW_TITLE_H"]
+    window_inset_x = consts["DISPLAY_FB_WINDOW_INSET_X"]
+    window_inset_y = consts["DISPLAY_FB_WINDOW_INSET_Y"]
+    line_gutter_width = consts["DISPLAY_FB_LINE_GUTTER_WIDTH"]
+    line_gutter_gap = consts["DISPLAY_FB_LINE_GUTTER_GAP"]
+    line_gutter_total = line_gutter_width + line_gutter_gap
+
+    workspace_top = (header_rows * char_h) + stage_margin_y
+    workspace_bottom = height - (footer_rows * char_h) - stage_margin_y
+    if workspace_bottom <= workspace_top + char_h:
+        return None
+
+    dock_left = stage_margin_x
+    dock_top = workspace_top
+    dock_height = workspace_bottom - workspace_top
+    sidebar_left = width - stage_margin_x - sidebar_width
+    panel_left = dock_left + dock_width + stage_gap
+    panel_top = workspace_top
+    panel_width = sidebar_left - stage_gap - panel_left
+    panel_height = workspace_bottom - workspace_top
+    if panel_width <= 0 or panel_height <= 0:
+        return None
+
+    console_width_px = panel_width - (panel_border * 2) - (window_inset_x * 2)
+    if console_width_px <= line_gutter_total + char_w:
+        return None
+    text_cols = (console_width_px - line_gutter_total) // char_w
+    if text_cols <= 0:
+        return None
+    console_width_px = line_gutter_total + (text_cols * char_w)
+    content_width = text_cols * char_w
+    console_slack_x = panel_width - (panel_border * 2) - (window_inset_x * 2) - console_width_px
+    content_left = panel_left + panel_border + window_inset_x + (console_slack_x // 2) + line_gutter_total
+
+    console_height_px = panel_height - (panel_border * 2) - window_title_h - (window_inset_y * 2)
+    if console_height_px <= char_h:
+        return None
+    text_rows = console_height_px // char_h
+    if text_rows < 2:
+        return None
+    console_height_px = text_rows * char_h
+    console_slack_y = (
+        panel_height - (panel_border * 2) - window_title_h - (window_inset_y * 2) - console_height_px
+    )
+    content_top = panel_top + panel_border + window_title_h + window_inset_y + (console_slack_y // 2)
+    content_bottom = content_top + console_height_px
+    scroll_rows = text_rows - 1
+
+    return {
+        "char_w": char_w,
+        "char_h": char_h,
+        "workspace_top": workspace_top,
+        "workspace_bottom": workspace_bottom,
+        "dock_left": dock_left,
+        "dock_top": dock_top,
+        "dock_width": dock_width,
+        "dock_height": dock_height,
+        "sidebar_left": sidebar_left,
+        "sidebar_width": sidebar_width,
+        "panel_left": panel_left,
+        "panel_top": panel_top,
+        "panel_width": panel_width,
+        "panel_height": panel_height,
+        "window_title_h": window_title_h,
+        "content_left": content_left,
+        "content_top": content_top,
+        "content_bottom": content_bottom,
+        "content_width": content_width,
+        "scroll_rows": scroll_rows,
+    }
+
+
+def _regions_fb_shell_v6(width: int, height: int, consts: Dict[str, int]) -> List[Rect]:
+    char_w = consts["DISPLAY_FB_CHAR_W"]
+    char_h = consts["DISPLAY_FB_CHAR_H"]
+    sidebar_card_gap = consts["DISPLAY_FB_SIDEBAR_CARD_GAP"]
+    sidebar_card_h = consts["DISPLAY_FB_SIDEBAR_CARD_H"]
+    layout = _layout_fb_shell_v6(width, height, consts)
+    if layout is None:
+        return []
+    cards_top = layout["panel_top"] + char_h + 8
+    card_left = layout["sidebar_left"] + 8
+    card_width = layout["sidebar_width"] - 16
+
+    rects = [
+        Rect(0, 0, min(width, 36 * char_w), char_h),
+        Rect(0, char_h - 2, width, 2),
+        Rect(layout["dock_left"], layout["dock_top"], layout["dock_width"], layout["dock_height"]),
+        Rect(layout["panel_left"] + 4, layout["panel_top"] + 4, layout["panel_width"], layout["panel_height"]),
+        Rect(layout["panel_left"], layout["panel_top"], layout["panel_width"], 1),
+        Rect(layout["panel_left"], layout["panel_top"] + layout["panel_height"] - 1, layout["panel_width"], 1),
+        Rect(layout["panel_left"], layout["panel_top"], 1, layout["panel_height"]),
+        Rect(layout["panel_left"] + layout["panel_width"] - 1, layout["panel_top"], 1, layout["panel_height"]),
+        Rect(layout["panel_left"] + 1, layout["panel_top"] + 1, layout["panel_width"] - 2, layout["window_title_h"]),
+        Rect(layout["sidebar_left"], layout["panel_top"], layout["sidebar_width"], 1),
+        Rect(layout["sidebar_left"], layout["panel_top"] + layout["panel_height"] - 1, layout["sidebar_width"], 1),
+        Rect(layout["sidebar_left"], layout["panel_top"], 1, layout["panel_height"]),
+        Rect(layout["sidebar_left"] + layout["sidebar_width"] - 1, layout["panel_top"], 1, layout["panel_height"]),
+        Rect(layout["sidebar_left"] + 1, layout["panel_top"] + 1, layout["sidebar_width"] - 2, char_h),
+    ]
+
+    for idx in range(4):
+        card_y = cards_top + (idx * (sidebar_card_h + sidebar_card_gap))
+        rects.append(Rect(card_left, card_y, card_width, 1))
+        rects.append(Rect(card_left, card_y + sidebar_card_h - 1, card_width, 1))
+        rects.append(Rect(card_left, card_y, 1, sidebar_card_h))
+        rects.append(Rect(card_left + card_width - 1, card_y, 1, sidebar_card_h))
+        rects.append(Rect(card_left + 1, card_y + 1, card_width - 2, char_h))
+        rects.append(Rect(card_left + 1, card_y + 1, 4, sidebar_card_h - 2))
+
+    return rects
+
+
+def _regions_fb_shell_v6_nav_task(width: int, height: int, consts: Dict[str, int]) -> List[Rect]:
+    layout = _layout_fb_shell_v6(width, height, consts)
+    if layout is None:
+        return []
+
+    rects = _regions_fb_shell_v6(width, height, consts)
+    body_rows = min(8, layout["scroll_rows"])
+    if body_rows > 0:
+        rects.append(
+            Rect(
+                layout["content_left"] - (consts["DISPLAY_FB_LINE_GUTTER_WIDTH"] + consts["DISPLAY_FB_LINE_GUTTER_GAP"]),
+                layout["content_top"],
+                layout["content_width"] + consts["DISPLAY_FB_LINE_GUTTER_WIDTH"] + consts["DISPLAY_FB_LINE_GUTTER_GAP"],
+                body_rows * layout["char_h"],
+            )
+        )
+    return rects
+
+
+def _regions_fb_shell_v6_nav_focus(width: int, height: int, consts: Dict[str, int]) -> List[Rect]:
+    layout = _layout_fb_shell_v6(width, height, consts)
+    if layout is None:
+        return []
+
+    char_w = layout["char_w"]
+    char_h = layout["char_h"]
+    sidebar_card_h = consts["DISPLAY_FB_SIDEBAR_CARD_H"]
+    sidebar_card_gap = consts["DISPLAY_FB_SIDEBAR_CARD_GAP"]
+    card_left = layout["sidebar_left"] + 8
+    card_width = layout["sidebar_width"] - 16
+    card_y = layout["panel_top"] + char_h + 8 + (1 * (sidebar_card_h + sidebar_card_gap))
+
+    return [
+        Rect(18 * char_w, 0, 22 * char_w, char_h),
+        Rect(layout["dock_left"], layout["dock_top"], layout["dock_width"], layout["dock_height"]),
+        Rect(layout["panel_left"] + 1, layout["panel_top"] + 1, layout["panel_width"] - 2, layout["window_title_h"]),
+        Rect(card_left, card_y, card_width, sidebar_card_h),
+    ]
+
+
 def _iter_region_payloads(pixels: bytes, width: int, rects: Iterable[Rect]) -> Tuple[int, int]:
     # Return (hash, sampled_pixel_count).
     row_stride = width * 3
@@ -198,10 +372,23 @@ def _iter_region_payloads(pixels: bytes, width: int, rects: Iterable[Rect]) -> T
 
 def compute_hash(ppm_path: str, profile: str, display_c_path: str) -> Tuple[int, int, int, int, int]:
     width, height, pixels = _read_ppm_p6(ppm_path)
-    if profile not in ("fb-shell-v4", "fb-shell-v5"):
+    if profile not in (
+        "fb-shell-v4",
+        "fb-shell-v5",
+        "fb-shell-v6",
+        "fb-shell-v6-nav-task",
+        "fb-shell-v6-nav-focus",
+    ):
         raise ValueError(f"unsupported profile: {profile}")
     consts = _load_display_constants(display_c_path)
-    rects = _regions_fb_shell_v4(width, height, consts)
+    if profile == "fb-shell-v6":
+        rects = _regions_fb_shell_v6(width, height, consts)
+    elif profile == "fb-shell-v6-nav-task":
+        rects = _regions_fb_shell_v6_nav_task(width, height, consts)
+    elif profile == "fb-shell-v6-nav-focus":
+        rects = _regions_fb_shell_v6_nav_focus(width, height, consts)
+    else:
+        rects = _regions_fb_shell_v4(width, height, consts)
     clipped: List[Rect] = []
     for r in rects:
         c = _clip_rect(r, width, height)
@@ -267,7 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hash = sub.add_parser("hash", help="compute ROI hash for a framebuffer PPM")
     p_hash.add_argument("--ppm", required=True, help="Input PPM path (P6)")
-    p_hash.add_argument("--profile", default="fb-shell-v5", help="GUI profile name")
+    p_hash.add_argument("--profile", default="fb-shell-v6", help="GUI profile name")
     p_hash.add_argument(
         "--display-c",
         default="kernel/display.c",
@@ -277,7 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_verify = sub.add_parser("verify", help="verify ROI hash for a framebuffer PPM")
     p_verify.add_argument("--ppm", required=True, help="Input PPM path (P6)")
-    p_verify.add_argument("--profile", default="fb-shell-v5", help="GUI profile name")
+    p_verify.add_argument("--profile", default="fb-shell-v6", help="GUI profile name")
     p_verify.add_argument("--expect-hash", required=True, help="Expected hash (hex or decimal)")
     p_verify.add_argument(
         "--display-c",

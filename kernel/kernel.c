@@ -24,6 +24,11 @@
 #include "usermode.h"
 #include "vfs.h"
 #include "keyboard.h"
+#include "mouse.h"
+
+#ifndef SKEZOS_GUI_BOOT
+#define SKEZOS_GUI_BOOT 0
+#endif
 
 #define LOG_BOOT_SERIAL 0
 #define BOOT_SPAWN_DEMO_TASKS 0
@@ -227,24 +232,38 @@ void kmain(uint32_t magic, uint32_t mb2_addr) {
     // Set up timer (100Hz) and keyboard
     timer_init(100);
     keyboard_init();
+#if SKEZOS_GUI_BOOT
+    if (display_framebuffer_ready()) {
+        display_gui_enable();
+        mouse_init();
+    }
+#endif
 
     // Initialize the kernel scheduler. The scheduler enables interrupts
     // when the first task starts.
     sched_init();
-    KASSERT(sched_spawn_kernel_task("console", console_task, 0, 0) == 0);
-    KASSERT(usermode_spawn_shell_task() == 0);
+#if SKEZOS_GUI_BOOT
+    if (display_gui_mode_active()) {
+        KASSERT(usermode_spawn_gui_session_task() == 0);
+        KLOGI("sched: boot tasks created (idle + gui-session)");
+    } else
+#endif
+    {
+        KASSERT(sched_spawn_kernel_task("console", console_task, 0, 0) == 0);
+        KASSERT(usermode_spawn_shell_task() == 0);
 
 #if BOOT_SPAWN_DEMO_TASKS
-    KASSERT(sched_spawn_kernel_task("worker-a", demo_worker_task, (void *)&g_demo_task_a, 0) == 0);
-    KASSERT(sched_spawn_kernel_task("worker-b", demo_worker_task, (void *)&g_demo_task_b, 0) == 0);
-    KASSERT(usermode_spawn_demo_task() == 0);
-    KASSERT(usermode_spawn_fault_task() == 0);
-    KASSERT(usermode_spawn_elf_demo_task_a() == 0);
-    KASSERT(usermode_spawn_elf_demo_task_b() == 0);
-    KLOGI("sched: demo tasks created (idle + console + 2 workers + user-demo + user-fault + 2 user-elf + shell)");
+        KASSERT(sched_spawn_kernel_task("worker-a", demo_worker_task, (void *)&g_demo_task_a, 0) == 0);
+        KASSERT(sched_spawn_kernel_task("worker-b", demo_worker_task, (void *)&g_demo_task_b, 0) == 0);
+        KASSERT(usermode_spawn_demo_task() == 0);
+        KASSERT(usermode_spawn_fault_task() == 0);
+        KASSERT(usermode_spawn_elf_demo_task_a() == 0);
+        KASSERT(usermode_spawn_elf_demo_task_b() == 0);
+        KLOGI("sched: demo tasks created (idle + console + 2 workers + user-demo + user-fault + 2 user-elf + shell)");
 #else
-    KLOGI("sched: boot tasks created (idle + console + shell)");
+        KLOGI("sched: boot tasks created (idle + console + shell)");
 #endif
+    }
 
     #if LOG_BOOT_SERIAL
     serial_writestr("kernel initialised\n");

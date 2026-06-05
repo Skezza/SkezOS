@@ -13,6 +13,16 @@
   - framebuffer console font upgraded to crisp `5x7` source glyphs while keeping existing `14x17` cell layout
   - GUI profile/hash contract moved to `fb-shell-v5` (`display: gui_state_hash=0x9A4C1DA5 profile=fb-shell-v5`)
   - nightly visual baseline now validates `fb-shell-v5` ROI hash `0x1BD7880D`
+- Landed desktop-shell chrome follow-on:
+  - framebuffer layout now renders a desktop-style top bar, launcher rail, windowed shell surface, and operator sidebar without changing shell/syscall ABI
+  - GUI profile/hash contract moved to `fb-shell-v6` (`display: gui_state_hash=0xAAA213A9 profile=fb-shell-v6`)
+  - visual ROI baseline now validates `fb-shell-v6` hash `0x17AA9EDD`
+  - shell output now drives live chrome state (`set theme`, `set hud`, `bootshow`, `hud:`) so the sidebar/top bar/prompt/footer react in-place without repainting the transcript surface
+  - desktop tabs/titlebar/dock now react to live command/task/operator state (`RUN`, multi-user task load, HUD/showcase health) while keeping the boot framebuffer baseline unchanged
+  - PS/2 arrow keys now drive framebuffer navigation state: left/right shifts focus between dock, live shell window, and sidebar, while up/down cycles the active app lens or selected operator card without changing the shell/runtime ABI or the boot framebuffer baseline
+  - framebuffer panel navigation now switches real body content instead of chrome only: `TERM` restores a retained visible transcript/prompt model, `TASK` renders scheduler snapshots, `FS` renders the live prompt-derived cwd via `vfs_list_dir()`, and `LOG` renders command-health/timeline telemetry without changing shell/syscall ABI
+  - scripted serial ANSI arrows now translate back into kernel keyboard scancodes for deterministic smoke coverage of the same navigation path used by real arrow keys
+  - nightly GUI coverage now includes `qemu-smoke-gui-nav`, with post-navigation framebuffer profiles `fb-shell-v6-nav-task` (`0x77AFF05E`) and `fb-shell-v6-nav-focus` (`0xBFC5F4C6`) while the default boot ROI baseline remains `fb-shell-v6` / `0x17AA9EDD`
 - Remaining intentional limits:
   - no journaling/fsck or crash-recovery redesign in `persistfs`
   - no shell `jobs`/`fg` builtins yet
@@ -118,6 +128,7 @@ Move active execution back to the GUI track with a narrow, low-risk framebuffer 
 - 2026-03-11 - Landed masked pixel-baseline gate for framebuffer GUI: new `scripts/gui_visual_baseline.py` computes profile-aware ROI hashes, `qemu-smoke-gui-visual-baseline` now asserts expected `fb-shell-v4` ROI hash (`0x1BD7880D`) in nightly, and `qemu-smoke-gui-visual-baseline-refresh` provides deterministic baseline refresh output.
 - 2026-03-11 - Landed framebuffer command-latency HUD telemetry: footer legend now includes compact command timing stats (`last/avg/peak`, outcome, and active run ticks) derived from existing prompt/wait/fail transitions with no syscall/parser/ABI changes; `qemu-smoke-shell-core` now asserts `display: cmd_latency ...` telemetry lines.
 - 2026-03-11 - Landed framebuffer command-health telemetry follow-up: header metrics now include compact command health (`ok/fail`, active fail streak, recent commands-per-minute), prompt input state now shows a subtle `CHK <n>` recovery cue after consecutive failures, and `qemu-smoke-shell-core` now asserts emitted `display: cmd_health ...` telemetry lines.
+- 2026-04-09 - Landed desktop-shell chrome slice: framebuffer mode now presents a top bar, launcher rail, windowed operator shell, and right-hand status sidebar while preserving the existing shell/runtime model; GUI contract bumped to `fb-shell-v6` with state hash `0xAAA213A9` and ROI baseline `0x17AA9EDD`.
 - 2026-03-11 - Landed framebuffer command-health state slice: command outcomes now drive a bounded `OK/WARN/DEGR` state machine (fail-streak + success-rate), footer legend now shows `H:<state>`, prompt lane adapts to `WARN/DEGR` recovery cues, and shell-core smoke now asserts emitted `display: cmd_health_state ...` transitions.
 - 2026-03-11 - Landed rolling command-quality window slice: recent command outcomes now feed a bounded rolling success window (`R%`) shown in header/footer HUD, health-state classification now prefers recent window quality when populated, and shell-core smoke now asserts emitted `display: cmd_health_window ...` logs.
 - 2026-03-11 - Landed command-health recovery slice: health-state transitions now account for dwell in `WARN/DEGR`, emit deterministic `display: cmd_health_recovery ...` lines with last/avg/peak recovery ticks, and expose compact recovery timing (`X`) in header/footer HUD telemetry.

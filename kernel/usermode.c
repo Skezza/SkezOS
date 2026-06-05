@@ -25,6 +25,8 @@ static int g_user_elf_demo_a_spawned;
 static int g_user_elf_demo_b_spawned;
 static int g_user_shell_spawned;
 static int g_user_shell_pid = -1;
+static int g_user_gui_session_spawned;
+static int g_user_gui_session_pid = -1;
 
 #define USERMODE_SPAWN_PATH_MAX 64U
 #define USERMODE_CMDLINE_MAX    128U
@@ -78,6 +80,15 @@ static const struct usermode_elf_demo_cfg g_user_shell_cfg = {
     .image_size = USER_ELF_SLOT4_IMAGE_SIZE_BYTES,
     .stack_base = USER_ELF_SLOT4_STACK_BASE,
     .stack_size = USER_ELF_SLOT4_STACK_SIZE_BYTES,
+};
+
+static const struct usermode_elf_demo_cfg g_user_gui_session_cfg = {
+    .path = "/bin/gui_session.elf",
+    .tag = "gui-session-bootstrap",
+    .image_base = USER_ELF_SLOT19_IMAGE_BASE,
+    .image_size = USER_ELF_SLOT19_IMAGE_SIZE_BYTES,
+    .stack_base = USER_ELF_SLOT19_STACK_BASE,
+    .stack_size = USER_ELF_SLOT19_STACK_SIZE_BYTES,
 };
 
 static struct usermode_child_slot g_user_child_slot2 = {
@@ -554,18 +565,40 @@ int usermode_spawn_elf_demo_task_b(void) {
 
 int usermode_spawn_shell_task(void) {
     int rc;
+    int pid = -1;
     if (g_user_shell_spawned) {
         return -KERR_NOTSUP;
     }
-    rc = sched_spawn_kernel_task("user-shell",
-                                 usermode_elf_demo_task,
-                                 (void *)&g_user_shell_cfg,
-                                 0);
+    rc = sched_spawn_kernel_task_ex("user-shell",
+                                    usermode_elf_demo_task,
+                                    (void *)&g_user_shell_cfg,
+                                    0,
+                                    &pid);
     if (rc < 0) {
         return rc;
     }
     g_user_shell_spawned = 1;
-    g_user_shell_pid = rc;
+    g_user_shell_pid = pid;
+    return 0;
+}
+
+int usermode_spawn_gui_session_task(void) {
+    int rc;
+    int pid = -1;
+
+    if (g_user_gui_session_spawned) {
+        return -KERR_NOTSUP;
+    }
+    rc = sched_spawn_kernel_task_ex("gui-session",
+                                    usermode_elf_demo_task,
+                                    (void *)&g_user_gui_session_cfg,
+                                    0,
+                                    &pid);
+    if (rc < 0) {
+        return rc;
+    }
+    g_user_gui_session_spawned = 1;
+    g_user_gui_session_pid = pid;
     return 0;
 }
 
@@ -660,6 +693,11 @@ void usermode_notify_task_reaped(int pid) {
         g_user_shell_spawned = 0;
         g_user_shell_pid = -1;
         vfs_console_set_input_owner_kernel();
+        return;
+    }
+    if (pid == g_user_gui_session_pid) {
+        g_user_gui_session_spawned = 0;
+        g_user_gui_session_pid = -1;
         return;
     }
     slot = usermode_child_slot_by_owner_pid(pid);
